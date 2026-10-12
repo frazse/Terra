@@ -425,6 +425,7 @@ pub struct AddonInfo {
 
 #[derive(Serialize)]
 pub struct AddonList {
+    version: String,
     dirs: Vec<String>,
     addons: Vec<AddonInfo>,
 }
@@ -432,6 +433,7 @@ pub struct AddonList {
 #[tauri::command]
 pub async fn addons_list(app: AppHandle) -> AddonList {
     AddonList {
+        version: app.package_info().version.to_string(),
         dirs: addon_dirs(&app).iter().map(|d| d.display().to_string()).collect(),
         addons: load_all(&app)
             .into_iter()

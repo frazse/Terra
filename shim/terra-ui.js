@@ -46,9 +46,10 @@
 .terra-switch input:checked + span { background: #ff6b57; }
 .terra-switch input:checked + span::after { transform: translateX(20px); }
 .terra-switch input:focus-visible + span { outline: 2px solid #fff; outline-offset: 2px; }
-.terra-foot { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 20px 16px;
-  border-top: 1px solid #25252d; color: #888; font-size: 12px; }
-.terra-foot span { min-width: 0; word-break: break-all; }
+.terra-foot { display: flex; flex-direction: column; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid #25252d; color: #888; font-size: 12px; }
+.terra-foot-dirs { min-width: 0; word-break: break-all; }
+.terra-foot-bottom { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.terra-foot-ver { color: #aaa; font-weight: 600; font-size: 12px; }
 .terra-btn { flex: none; background: #2a2a33; color: #eee; border: 0; border-radius: 6px; padding: 7px 14px; font: inherit; cursor: pointer; }
 .terra-btn:hover { background: #363642; }
 `;
@@ -183,7 +184,10 @@
           h('label', { class: 'terra-switch' }, input, h('span'))),
         box));
     }
-    foot.firstChild.textContent = res.dirs.length ? 'Addon folders: ' + res.dirs.join('  \u00b7  ') : '';
+    const dirsEl = foot.querySelector('.terra-foot-dirs');
+    if (dirsEl) dirsEl.textContent = res.dirs.length ? 'Addon folders: ' + res.dirs.join('  \u00b7  ') : '';
+    const verEl = foot.querySelector('.terra-foot-ver');
+    if (verEl) verEl.textContent = 'Terra ' + (res.version || '0.3.0');
     paintDots();
   }
 
@@ -198,7 +202,13 @@
     if (overlay) { if (opts && opts.expand) settingsToggles.get(opts.expand)?.(true); return; }
     ensureCss();
     body = h('div', { class: 'terra-body' }, 'Loading\u2026');
-    foot = h('div', { class: 'terra-foot' }, h('span'), h('button', { class: 'terra-btn', type: 'button', onclick: () => location.reload() }, 'Reload page'));
+    foot = h('div', { class: 'terra-foot' },
+      h('div', { class: 'terra-foot-dirs' }),
+      h('div', { class: 'terra-foot-bottom' },
+        h('div', { class: 'terra-foot-ver' }, 'Terra 0.3.0'),
+        h('button', { class: 'terra-btn', type: 'button', onclick: () => location.reload() }, 'Reload page')
+      )
+    );
     overlay = h('div', { class: 'terra-overlay' },
       h('div', { class: 'terra-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Terra addons' },
         h('div', { class: 'terra-head' }, h('h3', {}, 'Terra addons'),
