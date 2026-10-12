@@ -1,4 +1,5 @@
 # Terra 🚲
+Readme made by gemini.
 
 **Terra** is an open-source, cross-platform companion application and web runtime for **[Biketerra.com](https://biketerra.com)**, built using **[Tauri v2](https://tauri.app)**, Rust, and Kotlin.
 
@@ -20,11 +21,11 @@ It brings native Web Bluetooth integration, immersive fullscreen display, and a 
 
 ## 💻 Supported Platforms
 
-| Platform | Target | Output Format |
-| :--- | :--- | :--- |
-| **Android** | `aarch64-linux-android` | `.apk` |
-| **Linux Desktop** | `x86_64-unknown-linux-gnu` | AppImage, `.deb`, `.rpm` |
-| **Linux ARM64** | `aarch64-unknown-linux-gnu` | AppImage, `.deb` |
+| Platform                   | Target | Output Format |
+|:---------------------------| :--- | :--- |
+| **Android**                | `aarch64-linux-android` | `.apk` |
+| **Linux Desktop**          | `x86_64-unknown-linux-gnu` | AppImage, `.deb`, `.rpm` |
+| **Linux ARM64** not tested | `aarch64-unknown-linux-gnu` | AppImage, `.deb` | 
 
 ---
 
