@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-storage-set"
+description = "Enables the addon_storage_set command without any pre-configured scope."
+commands.allow = ["addon_storage_set"]
+
+[[permission]]
+identifier = "deny-addon-storage-set"
+description = "Denies the addon_storage_set command without any pre-configured scope."
+commands.deny = ["addon_storage_set"]

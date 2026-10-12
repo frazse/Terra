@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chooser-pick"
+description = "Enables the chooser_pick command without any pre-configured scope."
+commands.allow = ["chooser_pick"]
+
+[[permission]]
+identifier = "deny-chooser-pick"
+description = "Denies the chooser_pick command without any pre-configured scope."
+commands.deny = ["chooser_pick"]

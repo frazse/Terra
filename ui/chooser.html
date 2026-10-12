@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Select Bluetooth device</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 14px system-ui, sans-serif; background: #14161a; color: #e8e8e8; margin: 0; padding: 14px; }
+  h3 { margin: 0 0 4px; font-size: 16px; }
+  p { margin: 0 0 12px; color: #8b93a0; font-size: 12px; }
+  .dev { display: flex; justify-content: space-between; align-items: center; width: 100%;
+         background: #1e2127; border: 1px solid #2c313a; border-radius: 8px; color: inherit;
+         padding: 10px 12px; margin-bottom: 8px; cursor: pointer; text-align: left; font: inherit; }
+  .dev:hover { border-color: #3b82f6; background: #232832; }
+  .name { font-weight: 600; }
+  .meta { color: #8b93a0; font-size: 12px; margin-top: 2px; }
+  .rssi { color: #8b93a0; font-size: 12px; white-space: nowrap; }
+  #empty { color: #8b93a0; padding: 20px 0; text-align: center; }
+  #cancel { margin-top: 6px; background: none; border: 1px solid #2c313a; color: #cfd3da;
+            border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+</style>
+<h3>Select a Bluetooth device</h3>
+<p>Showing devices in range that Biketerra can use. Picked devices are remembered.</p>
+<div id="list"><div id="empty">Scanning…</div></div>
+<button id="cancel">Cancel</button>
+<script>
+  const invoke = (c, a) => window.__TAURI_INTERNALS__.invoke(c, a);
+  const list = document.getElementById('list');
+  async function tick() {
+    try {
+      const devs = await invoke('chooser_candidates');
+      list.replaceChildren();
+      if (!devs.length) {
+        const e = document.createElement('div');
+        e.id = 'empty'; e.textContent = 'Scanning… (wake your device / start pedalling)';
+        list.append(e);
+      }
+      for (const d of devs) {
+        const b = document.createElement('button');
+        b.className = 'dev';
+        const l = document.createElement('div');
+        const n = document.createElement('div'); n.className = 'name';
+        n.textContent = d.name || d.id;
+        const m = document.createElement('div'); m.className = 'meta';
+        m.textContent = d.kind + (d.remembered ? ' · remembered' : '');
+        l.append(n, m);
+        const r = document.createElement('div'); r.className = 'rssi';
+        r.textContent = d.rssi != null ? d.rssi + ' dBm' : '';
+        b.append(l, r);
+        b.onclick = () => invoke('chooser_pick', { id: d.id });
+        list.append(b);
+      }
+    } catch (e) { console.error(e); }
+  }
+  document.getElementById('cancel').onclick = () => invoke('chooser_cancel');
+  tick(); setInterval(tick, 800);
+</script>

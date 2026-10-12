@@ -1,0 +1,7 @@
+/target
+/gen
+/addons/*
+!/addons/.gitkeep
+release.keystore
+*.keystore
+.idea

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ble-request-device"
+description = "Enables the ble_request_device command without any pre-configured scope."
+commands.allow = ["ble_request_device"]
+
+[[permission]]
+identifier = "deny-ble-request-device"
+description = "Denies the ble_request_device command without any pre-configured scope."
+commands.deny = ["ble_request_device"]

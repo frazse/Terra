@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chooser-cancel"
+description = "Enables the chooser_cancel command without any pre-configured scope."
+commands.allow = ["chooser_cancel"]
+
+[[permission]]
+identifier = "deny-chooser-cancel"
+description = "Denies the chooser_cancel command without any pre-configured scope."
+commands.deny = ["chooser_cancel"]

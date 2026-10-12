@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-save-file"
+description = "Enables the addon_save_file command without any pre-configured scope."
+commands.allow = ["addon_save_file"]
+
+[[permission]]
+identifier = "deny-addon-save-file"
+description = "Denies the addon_save_file command without any pre-configured scope."
+commands.deny = ["addon_save_file"]

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "chooser-window",
+  "description": "Local device chooser window",
+  "windows": ["chooser"],
+  "permissions": [
+    "allow-chooser-candidates",
+    "allow-chooser-pick",
+    "allow-chooser-cancel"
+  ]
+}

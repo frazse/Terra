@@ -1,0 +1,36 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-biketerra",
+  "description": "Allows the biketerra.com webview to call Terra's IPC commands",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["https://biketerra.com/*", "https://*.biketerra.com/*"]
+  },
+  "permissions": [
+    "allow-shim-log",
+    "allow-ble-request-device",
+    "allow-ble-connect",
+    "allow-ble-disconnect",
+    "allow-ble-forget",
+    "allow-ble-remembered",
+    "allow-ble-release",
+    "allow-ble-read",
+    "allow-ble-write",
+    "allow-ble-subscribe",
+    "allow-ble-unsubscribe",
+    "allow-chooser-candidates",
+    "allow-chooser-pick",
+    "allow-chooser-cancel",
+    "core:window:allow-set-fullscreen",
+    "allow-addons-activate",
+    "allow-addon-storage-get",
+    "allow-addon-storage-set",
+    "allow-addon-storage-remove",
+    "allow-addons-list",
+    "allow-addons-set-enabled",
+    "allow-addon-settings-get",
+    "allow-addon-settings-set",
+    "allow-addon-http",
+    "allow-addon-save-file"
+  ]
+}

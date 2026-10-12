@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-storage-remove"
+description = "Enables the addon_storage_remove command without any pre-configured scope."
+commands.allow = ["addon_storage_remove"]
+
+[[permission]]
+identifier = "deny-addon-storage-remove"
+description = "Denies the addon_storage_remove command without any pre-configured scope."
+commands.deny = ["addon_storage_remove"]

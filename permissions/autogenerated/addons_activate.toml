@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addons-activate"
+description = "Enables the addons_activate command without any pre-configured scope."
+commands.allow = ["addons_activate"]
+
+[[permission]]
+identifier = "deny-addons-activate"
+description = "Denies the addons_activate command without any pre-configured scope."
+commands.deny = ["addons_activate"]

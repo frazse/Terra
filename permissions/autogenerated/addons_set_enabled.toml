@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addons-set-enabled"
+description = "Enables the addons_set_enabled command without any pre-configured scope."
+commands.allow = ["addons_set_enabled"]
+
+[[permission]]
+identifier = "deny-addons-set-enabled"
+description = "Denies the addons_set_enabled command without any pre-configured scope."
+commands.deny = ["addons_set_enabled"]

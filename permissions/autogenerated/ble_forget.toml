@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ble-forget"
+description = "Enables the ble_forget command without any pre-configured scope."
+commands.allow = ["ble_forget"]
+
+[[permission]]
+identifier = "deny-ble-forget"
+description = "Denies the ble_forget command without any pre-configured scope."
+commands.deny = ["ble_forget"]
