@@ -187,7 +187,7 @@
     const dirsEl = foot.querySelector('.terra-foot-dirs');
     if (dirsEl) dirsEl.textContent = res.dirs.length ? 'Addon folders: ' + res.dirs.join('  \u00b7  ') : '';
     const verEl = foot.querySelector('.terra-foot-ver');
-    if (verEl) verEl.textContent = 'Terra ' + (res.version || '0.3.0');
+    if (verEl) verEl.textContent = 'Terra ' + (res.version || '0.3.1');
     paintDots();
   }
 
@@ -205,7 +205,7 @@
     foot = h('div', { class: 'terra-foot' },
       h('div', { class: 'terra-foot-dirs' }),
       h('div', { class: 'terra-foot-bottom' },
-        h('div', { class: 'terra-foot-ver' }, 'Terra 0.3.0'),
+        h('div', { class: 'terra-foot-ver' }, 'Terra 0.3.1'),
         h('button', { class: 'terra-btn', type: 'button', onclick: () => location.reload() }, 'Reload page')
       )
     );

@@ -91,18 +91,21 @@ class MainActivity : TauriActivity() {
       val addonsDir = File(extDir, "addons")
       if (!addonsDir.exists()) addonsDir.mkdirs()
 
-      val zwiftRideDir = File(addonsDir, "zwift-ride")
-      if (!zwiftRideDir.exists()) {
-        zwiftRideDir.mkdirs()
-        val files = assets.list("addons/zwift-ride") ?: return
-        for (f in files) {
-          val inStream = assets.open("addons/zwift-ride/$f")
-          val outFile = File(zwiftRideDir, f)
-          FileOutputStream(outFile).use { outStream ->
-            inStream.copyTo(outStream)
+      val bundledAddons = listOf("zwift-ride", "garmin-hud", "fps-monitor")
+      for (addonName in bundledAddons) {
+        val targetDir = File(addonsDir, addonName)
+        if (!targetDir.exists()) {
+          targetDir.mkdirs()
+          val files = assets.list("addons/$addonName") ?: continue
+          for (f in files) {
+            val inStream = assets.open("addons/$addonName/$f")
+            val outFile = File(targetDir, f)
+            FileOutputStream(outFile).use { outStream ->
+              inStream.copyTo(outStream)
+            }
           }
+          android.util.Log.i("Terra", "Successfully extracted bundled $addonName addon")
         }
-        android.util.Log.i("Terra", "Successfully extracted bundled zwift-ride addon")
       }
     } catch (e: Exception) {
       android.util.Log.e("Terra", "Error extracting bundled addons", e)
