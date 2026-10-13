@@ -142,25 +142,31 @@ impl Filter {
             if !svcs.is_empty() {
                 let mut matched = false;
                 for s in svcs {
-                    if let Ok(u) = Uuid::parse_str(s) {
-                        if props.services.contains(&u) {
+                    let s_clean = s.trim().to_lowercase();
+                    let s_short = if s_clean.len() == 4 {
+                        s_clean.clone()
+                    } else if s_clean.len() == 36 && s_clean.starts_with("0000") && s_clean.ends_with("-0000-1000-8000-00805f9b34fb") {
+                        s_clean[4..8].to_string()
+                    } else {
+                        "".to_string()
+                    };
+
+                    for ps in &props.services {
+                        let ps_str = ps.to_string().to_lowercase();
+                        if ps_str == s_clean {
                             matched = true;
                             break;
                         }
-                        let s_short = if s.len() == 4 {
-                            s.to_lowercase()
-                        } else if s.len() == 36 && s.starts_with("0000") {
-                            s[4..8].to_lowercase()
-                        } else {
-                            "".to_string()
-                        };
-                        if !s_short.is_empty() && props.services.iter().any(|ps| su(ps).to_lowercase() == s_short) {
+                        if !s_short.is_empty() && su(ps).to_lowercase() == s_short {
                             matched = true;
                             break;
                         }
                     }
+                    if matched {
+                        break;
+                    }
                 }
-                if !matched && !props.services.is_empty() {
+                if !matched {
                     return false;
                 }
             }
@@ -186,7 +192,7 @@ fn wanted(props: &DiscoveredProps, filters: &[Filter], excl: &[Filter], all: boo
     if all || filters.is_empty() {
         return true;
     }
-    filters.iter().any(|f| f.matches(props)) || props.services.is_empty()
+    filters.iter().any(|f| f.matches(props)) || props.services.is_empty() || props.name.is_some()
 }
 
 /// Lower = more important (trainers first, HR last), used to order auto-picks.
@@ -503,7 +509,7 @@ impl Broker {
         silent: bool,
         owner: Option<String>,
     ) -> Result<DeviceInfo, String> {
-        if owner.is_none() {
+        if owner.is_none() && silent {
             if let Some(info) = self.remembered_match(&filters, &exclusions, accept_all).await {
                 println!("[terra] remembered match: {:?}", info.name);
                 return Ok(info);
@@ -755,6 +761,30 @@ impl Broker {
 // ---------- ANDROID BROKER & JNI ----------
 
 #[cfg(target_os = "android")]
+extern "C" {
+    fn __android_log_print(prio: std::os::raw::c_int, tag: *const std::os::raw::c_char, fmt: *const std::os::raw::c_char, ...) -> std::os::raw::c_int;
+}
+
+#[cfg(target_os = "android")]
+fn alog(msg: &str) {
+    let tag = match std::ffi::CString::new("TerraRustBle") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let fmt = match std::ffi::CString::new("%s") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let c_msg = match std::ffi::CString::new(msg) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    unsafe {
+        __android_log_print(4, tag.as_ptr(), fmt.as_ptr(), c_msg.as_ptr());
+    }
+}
+
+#[cfg(target_os = "android")]
 static ANDROID_APP: std::sync::Mutex<Option<AppHandle>> = std::sync::Mutex::new(None);
 
 #[cfg(target_os = "android")]
@@ -781,27 +811,126 @@ fn get_java_vm() -> Result<jni::JavaVM, String> {
 }
 
 #[cfg(target_os = "android")]
-static BLE_MANAGER_CLASS: std::sync::atomic::AtomicPtr<jni::sys::_jobject> =
-    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static BLE_MANAGER_CLASS: std::sync::RwLock<Option<jni::objects::GlobalRef>> =
+    std::sync::RwLock::new(None);
+
+#[cfg(target_os = "android")]
+#[derive(Clone, Copy)]
+struct SendJMethodID(jni::sys::jmethodID);
+
+#[cfg(target_os = "android")]
+unsafe impl Send for SendJMethodID {}
+
+#[cfg(target_os = "android")]
+unsafe impl Sync for SendJMethodID {}
+
+#[cfg(target_os = "android")]
+struct BleManagerMethods {
+    start_scan: SendJMethodID,
+    stop_scan: SendJMethodID,
+    get_discovered_devices_json: SendJMethodID,
+    is_connected: SendJMethodID,
+    connect: SendJMethodID,
+    disconnect: SendJMethodID,
+    read_characteristic: SendJMethodID,
+    write_characteristic: SendJMethodID,
+    subscribe_characteristic: SendJMethodID,
+    unsubscribe_all: SendJMethodID,
+}
+
+#[cfg(target_os = "android")]
+static BLE_METHODS: std::sync::RwLock<Option<BleManagerMethods>> = std::sync::RwLock::new(None);
 
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub unsafe extern "C" fn Java_dev_frazse_terra_BleManager_registerClassJni(
     env: *mut jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-    clazz: jni::sys::jclass,
+    class: jni::sys::jclass,
 ) {
-    if env.is_null() || clazz.is_null() {
+    if env.is_null() || class.is_null() {
         return;
     }
-    let env = match unsafe { jni::JNIEnv::from_raw(env) } {
+    let mut env = match unsafe { jni::JNIEnv::from_raw(env) } {
         Ok(e) => e,
         Err(_) => return,
     };
-    if let Ok(global_ref) = env.new_global_ref(unsafe { jni::objects::JClass::from_raw(clazz) }) {
-        let ptr = global_ref.as_raw();
-        BLE_MANAGER_CLASS.store(ptr, std::sync::atomic::Ordering::SeqCst);
-        std::mem::forget(global_ref);
+    let cls = unsafe { jni::objects::JClass::from_raw(class) };
+    let global_ref = match env.new_global_ref(&cls) {
+        Ok(g) => g,
+        Err(e) => {
+            alog(&format!("Failed to create global ref for BleManager: {:?}", e));
+            return;
+        }
+    };
+
+    let mut get_mid = |name: &str, sig: &str| -> Option<SendJMethodID> {
+        match env.get_static_method_id(&cls, name, sig) {
+            Ok(m) => Some(SendJMethodID(m.into_raw())),
+            Err(err) => {
+                alog(&format!("Failed to get static method id for {} {}: {:?}", name, sig, err));
+                if env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_describe();
+                    let _ = env.exception_clear();
+                }
+                None
+            }
+        }
+    };
+
+    let start_scan = get_mid("startScan", "()Z");
+    let stop_scan = get_mid("stopScan", "()V");
+    let get_discovered_devices_json = get_mid("getDiscoveredDevicesJson", "()Ljava/lang/String;");
+    let is_connected = get_mid("isConnected", "(Ljava/lang/String;)Z");
+    let connect = get_mid("connect", "(Ljava/lang/String;)Ljava/lang/String;");
+    let disconnect = get_mid("disconnect", "(Ljava/lang/String;)V");
+    let read_characteristic = get_mid("readCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    let write_characteristic = get_mid("writeCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;");
+    let subscribe_characteristic = get_mid("subscribeCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;");
+    let unsubscribe_all = get_mid("unsubscribeAll", "(Ljava/lang/String;)Ljava/lang/String;");
+
+    if let (
+        Some(start_scan),
+        Some(stop_scan),
+        Some(get_discovered_devices_json),
+        Some(is_connected),
+        Some(connect),
+        Some(disconnect),
+        Some(read_characteristic),
+        Some(write_characteristic),
+        Some(subscribe_characteristic),
+        Some(unsubscribe_all),
+    ) = (
+        start_scan,
+        stop_scan,
+        get_discovered_devices_json,
+        is_connected,
+        connect,
+        disconnect,
+        read_characteristic,
+        write_characteristic,
+        subscribe_characteristic,
+        unsubscribe_all,
+    ) {
+        if let Ok(mut w) = BLE_METHODS.write() {
+            *w = Some(BleManagerMethods {
+                start_scan,
+                stop_scan,
+                get_discovered_devices_json,
+                is_connected,
+                connect,
+                disconnect,
+                read_characteristic,
+                write_characteristic,
+                subscribe_characteristic,
+                unsubscribe_all,
+            });
+        }
+        if let Ok(mut w) = BLE_MANAGER_CLASS.write() {
+            *w = Some(global_ref);
+        }
+        alog("BleManager methods successfully registered and cached!");
+    } else {
+        alog("ERROR: Some BleManager methods could not be found!");
     }
 }
 
@@ -809,14 +938,43 @@ pub unsafe extern "C" fn Java_dev_frazse_terra_BleManager_registerClassJni(
 fn call_ble_manager(method: &str, sig: &str, args: &[jni::objects::JValue]) -> Result<String, String> {
     let vm = get_java_vm()?;
     let mut env = vm.attach_current_thread().map_err(err)?;
-    let cls_ptr = BLE_MANAGER_CLASS.load(std::sync::atomic::Ordering::SeqCst);
-    if cls_ptr.is_null() {
-        return Err("BleManager class not registered".to_string());
-    }
-    let cls = unsafe { jni::objects::JClass::from_raw(cls_ptr) };
-    let res = match env.call_static_method(&cls, method, sig, args) {
+    let read_guard = BLE_MANAGER_CLASS.read().map_err(|e| e.to_string())?;
+    let global_ref = read_guard.as_ref().ok_or_else(|| "BleManager class not registered".to_string())?;
+    let cls = unsafe { jni::objects::JClass::from_raw(global_ref.as_raw()) };
+
+    let method_id = {
+        let guard = BLE_METHODS.read().map_err(|e| e.to_string())?;
+        let methods = guard.as_ref().ok_or_else(|| "BleManager methods not registered".to_string())?;
+        let raw = match method {
+            "startScan" => methods.start_scan.0,
+            "stopScan" => methods.stop_scan.0,
+            "getDiscoveredDevicesJson" => methods.get_discovered_devices_json.0,
+            "isConnected" => methods.is_connected.0,
+            "connect" => methods.connect.0,
+            "disconnect" => methods.disconnect.0,
+            "readCharacteristic" => methods.read_characteristic.0,
+            "writeCharacteristic" => methods.write_characteristic.0,
+            "subscribeCharacteristic" => methods.subscribe_characteristic.0,
+            "unsubscribeAll" => methods.unsubscribe_all.0,
+            _ => return Err(format!("Unknown method name: {method}")),
+        };
+        unsafe { jni::objects::JStaticMethodID::from_raw(raw) }
+    };
+
+    let ret_type = if sig.ends_with("Z") {
+        jni::signature::ReturnType::Primitive(jni::signature::Primitive::Boolean)
+    } else if sig.ends_with("V") {
+        jni::signature::ReturnType::Primitive(jni::signature::Primitive::Void)
+    } else {
+        jni::signature::ReturnType::Object
+    };
+
+    let jvalues: Vec<jni::sys::jvalue> = args.iter().map(|v| v.as_jni()).collect();
+
+    let res = match unsafe { env.call_static_method_unchecked(&cls, method_id, ret_type, &jvalues) } {
         Ok(v) => v,
         Err(e) => {
+            alog(&format!("call_static_method_unchecked {method} {sig} failed: {e}"));
             if env.exception_check().unwrap_or(false) {
                 let _ = env.exception_describe();
                 let _ = env.exception_clear();
@@ -824,6 +982,7 @@ fn call_ble_manager(method: &str, sig: &str, args: &[jni::objects::JValue]) -> R
             return Err(format!("JNI error calling {method}: {e}"));
         }
     };
+
     if sig.ends_with("Z") {
         let b = res.z().map_err(err)?;
         return Ok(if b { "true".to_string() } else { "false".to_string() });
@@ -836,10 +995,9 @@ fn call_ble_manager(method: &str, sig: &str, args: &[jni::objects::JValue]) -> R
             return Ok("".to_string());
         }
         let rust_str: String = env.get_string(&jni::objects::JString::from(jstr)).map_err(err)?.into();
-        Ok(rust_str)
-    } else {
-        Ok("".to_string())
+        return Ok(rust_str);
     }
+    Ok("".to_string())
 }
 
 #[cfg(target_os = "android")]
@@ -1094,9 +1252,10 @@ impl Broker {
         silent: bool,
         owner: Option<String>,
     ) -> Result<DeviceInfo, String> {
-        if owner.is_none() {
+        alog(&format!("request_device called: silent={} accept_all={} owner={:?}", silent, accept_all, owner));
+        if owner.is_none() && silent {
             if let Some(info) = self.remembered_match(&filters, &exclusions, accept_all).await {
-                println!("[terra] remembered match: {:?}", info.name);
+                alog(&format!("remembered match: {:?}", info.name));
                 return Ok(info);
             }
         }
@@ -1109,12 +1268,15 @@ impl Broker {
         {
             let mut pend = self.pending.lock().await;
             if pend.is_some() {
+                alog("request_device error: a device chooser is already open");
                 return Err("NotFound: a device chooser is already open".into());
             }
             *pend = Some(Pending { filters, exclusions, accept_all, owner: owner.clone(), tx: Some(tx) });
         }
 
-        let _ = call_ble_manager("startScan", "()Z", &[]);
+        alog("Calling BleManager.startScan()...");
+        let scan_res = call_ble_manager("startScan", "()Z", &[]);
+        alog(&format!("BleManager.startScan() result: {:?}", scan_res));
 
         if let Err(e) = self.open_chooser() {
             self.pending.lock().await.take();
@@ -1147,8 +1309,12 @@ impl Broker {
         let known = self.known.lock().await.clone();
         let released = self.released.lock().await.clone();
         let mut out = vec![];
-        for props in self.discovered_devices() {
-            if !wanted(&props, &filters, &excl, all) {
+        let disc = self.discovered_devices();
+        alog(&format!("candidates: discovered_count={}", disc.len()));
+        for props in disc {
+            let w = wanted(&props, &filters, &excl, all);
+            alog(&format!("device id={} name={:?} wanted={}", props.id, props.name, w));
+            if !w {
                 continue;
             }
             let id = props.id.clone();

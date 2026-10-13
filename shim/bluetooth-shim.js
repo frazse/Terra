@@ -367,6 +367,104 @@
       .observe(document, { childList: true, subtree: true, characterData: true });
   })();
 
+  // In-page Bluetooth device chooser modal for Android & Webview contexts
+  let chooserOverlay = null, chooserPollTimer = null;
+
+  window.showChooserModal = () => {
+    if (chooserOverlay) return;
+    const CSS = `
+.terra-chooser-overlay { position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.65); backdrop-filter: blur(4px); font: 14px system-ui, sans-serif; }
+.terra-chooser-modal { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 64px); display: flex; flex-direction: column;
+  background: #18181f; color: #eee; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.7); overflow: hidden; border: 1px solid #2d2d38; }
+.terra-chooser-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #2a2a35; }
+.terra-chooser-head h3 { margin: 0; font-size: 16px; font-weight: 600; color: #fff; }
+.terra-chooser-body { padding: 12px 16px; max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.terra-chooser-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: #22222c; border-radius: 10px; border: 1px solid #2e2e3b; }
+.terra-chooser-item:hover { background: #2a2a38; }
+.terra-chooser-name { font-weight: 600; color: #fff; font-size: 14px; }
+.terra-chooser-sub { font-size: 12px; color: #8a8a9a; margin-top: 2px; }
+.terra-chooser-btn { background: #ff6b57; color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; font-weight: 600; cursor: pointer; }
+.terra-chooser-btn:hover { background: #ff523b; }
+.terra-chooser-foot { display: flex; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #2a2a35; background: #14141a; }
+.terra-chooser-cancel { background: #2a2a35; color: #bbb; border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; }
+.terra-chooser-cancel:hover { background: #353542; color: #fff; }
+`;
+    try {
+      const s = new CSSStyleSheet(); s.replaceSync(CSS);
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, s];
+    } catch {
+      const el = document.createElement('style'); el.textContent = CSS;
+      document.head.append(el);
+    }
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'terra-chooser-body';
+    bodyEl.innerHTML = '<div style="padding: 24px; text-align: center; color: #8a8a9a;">Scanning for Bluetooth devices\u2026</div>';
+
+    const renderCandidates = async () => {
+      try {
+        const list = await call('chooser_candidates');
+        if (!chooserOverlay) return;
+        if (!list || !list.length) {
+          bodyEl.innerHTML = '<div style="padding: 24px; text-align: center; color: #8a8a9a;">Scanning for Bluetooth devices\u2026</div>';
+          return;
+        }
+        bodyEl.replaceChildren();
+        for (const c of list) {
+          const item = document.createElement('div');
+          item.className = 'terra-chooser-item';
+          const info = document.createElement('div');
+          info.innerHTML = `<div class="terra-chooser-name">${c.name || 'Unnamed Device'}</div><div class="terra-chooser-sub">${c.kind} \u00b7 ${c.rssi} dBm</div>`;
+          const btn = document.createElement('button');
+          btn.className = 'terra-chooser-btn';
+          btn.textContent = 'Pair';
+          btn.onclick = async () => {
+            window.hideChooserModal();
+            try { await call('chooser_pick', { id: c.id }); } catch (e) { console.error('[terra-chooser]', e); }
+          };
+          item.append(info, btn);
+          bodyEl.append(item);
+        }
+      } catch (e) { console.error('[terra-chooser]', e); }
+    };
+
+    chooserOverlay = document.createElement('div');
+    chooserOverlay.className = 'terra-chooser-overlay';
+    chooserOverlay.innerHTML = `
+      <div class="terra-chooser-modal">
+        <div class="terra-chooser-head">
+          <h3>Pair Bluetooth Device</h3>
+        </div>
+      </div>
+    `;
+    const modal = chooserOverlay.querySelector('.terra-chooser-modal');
+    const footEl = document.createElement('div');
+    footEl.className = 'terra-chooser-foot';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'terra-chooser-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = async () => {
+      window.hideChooserModal();
+      try { await call('chooser_cancel'); } catch (e) { console.error('[terra-chooser]', e); }
+    };
+    footEl.append(cancelBtn);
+    modal.append(bodyEl, footEl);
+
+    document.body.append(chooserOverlay);
+    renderCandidates();
+    chooserPollTimer = setInterval(renderCandidates, 1000);
+  };
+
+  window.hideChooserModal = () => {
+    if (chooserPollTimer) { clearInterval(chooserPollTimer); chooserPollTimer = null; }
+    if (chooserOverlay) { chooserOverlay.remove(); chooserOverlay = null; }
+  };
+
+  window.__terra = window.__terra || {};
+  window.__terra.showChooserModal = window.showChooserModal;
+  window.__terra.hideChooserModal = window.hideChooserModal;
+
   const deviceFor = (info) => {
     let d = devices.get(info.id);
     if (!d) { d = new TerraBluetoothDevice(info); devices.set(info.id, d); }
