@@ -21,6 +21,8 @@ jobs:
             curl \
             wget \
             file \
+            pkg-config \
+            libglib2.0-dev \
             libssl-dev \
             libdbus-1-dev \
             libudev-dev \
