@@ -52,6 +52,11 @@
 .terra-foot-ver { color: #aaa; font-weight: 600; font-size: 12px; }
 .terra-btn { flex: none; background: #2a2a33; color: #eee; border: 0; border-radius: 6px; padding: 7px 14px; font: inherit; cursor: pointer; }
 .terra-btn:hover { background: #363642; }
+canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="profile"] {
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
 `;
   let sheeted = false;
   const ensureCss = () => {
@@ -187,7 +192,7 @@
     const dirsEl = foot.querySelector('.terra-foot-dirs');
     if (dirsEl) dirsEl.textContent = res.dirs.length ? 'Addon folders: ' + res.dirs.join('  \u00b7  ') : '';
     const verEl = foot.querySelector('.terra-foot-ver');
-    if (verEl) verEl.textContent = 'Terra ' + (res.version || '0.3.1');
+    if (verEl) verEl.textContent = 'Terra ' + (res.version || '0.4.0');
     paintDots();
   }
 
@@ -205,7 +210,7 @@
     foot = h('div', { class: 'terra-foot' },
       h('div', { class: 'terra-foot-dirs' }),
       h('div', { class: 'terra-foot-bottom' },
-        h('div', { class: 'terra-foot-ver' }, 'Terra 0.3.1'),
+        h('div', { class: 'terra-foot-ver' }, 'Terra 0.4.0'),
         h('button', { class: 'terra-btn', type: 'button', onclick: () => location.reload() }, 'Reload page')
       )
     );

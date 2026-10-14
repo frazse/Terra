@@ -1,5 +1,7 @@
 mod addons;
 mod ble;
+#[cfg(all(not(target_os = "android"), target_os = "linux"))]
+mod rpc;
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -61,16 +63,28 @@ pub fn run() {
                 println!("[terra] addon: {} v{} ({}){}", a.name, a.version, a.id, if a.enabled { "" } else { " [disabled]" });
             }
 
-            let init = format!("{SHIM}\n;\n{LOADER}\n;\n{UI}");
-            WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::External("https://biketerra.com".parse().unwrap()),
-            )
-            .title("Terra")
-            .inner_size(1400.0, 900.0)
-            .initialization_script(&init)
-            .build()?;
+            let is_rpc = std::env::args().any(|a| a == "--rpc");
+
+            if is_rpc {
+                #[cfg(all(not(target_os = "android"), target_os = "linux"))]
+                {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        rpc::run_rpc_server(app_handle).await;
+                    });
+                }
+            } else {
+                let init = format!("{SHIM}\n;\n{LOADER}\n;\n{UI}");
+                WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    WebviewUrl::External("https://biketerra.com".parse().unwrap()),
+                )
+                .title("Terra")
+                .inner_size(1400.0, 900.0)
+                .initialization_script(&init)
+                .build()?;
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

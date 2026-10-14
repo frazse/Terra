@@ -112,9 +112,21 @@ fn describe(chr: &Uuid, b: &[u8]) -> String {
 
 /// Call `window.__terra.<func>(...args)` in the biketerra webview.
 fn js(app: &AppHandle, func: &str, args: Vec<Value>) {
+    let a: Vec<String> = args.iter().map(|v| v.to_string()).collect();
+    let code = format!("window.__terra && window.__terra.{func}({})", a.join(","));
     if let Some(w) = app.get_webview_window("main") {
-        let a: Vec<String> = args.iter().map(|v| v.to_string()).collect();
-        let _ = w.eval(format!("window.__terra && window.__terra.{func}({})", a.join(",")));
+        let _ = w.eval(code);
+    } else {
+        let evt = serde_json::json!({
+            "event": "js_eval",
+            "code": code
+        });
+        if let Ok(line) = serde_json::to_string(&evt) {
+            use std::io::Write;
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{line}");
+            let _ = out.flush();
+        }
     }
 }
 
@@ -232,10 +244,10 @@ fn props_from_peripheral(p: &Peripheral, props: &PeripheralProperties) -> Discov
 
 // ---------- wire types ----------
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DeviceInfo {
-    id: String,
-    name: Option<String>,
+    pub id: String,
+    pub name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -267,12 +279,12 @@ pub struct Candidate {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Remembered {
-    id: String,
-    name: Option<String>,
+pub struct Remembered {
+    pub id: String,
+    pub name: Option<String>,
     /// Set when an addon paired the device: the page's auto-pair/chooser then leaves it alone.
     #[serde(default)]
-    owner: Option<String>,
+    pub owner: Option<String>,
 }
 
 struct Pending {
@@ -292,14 +304,14 @@ pub struct Broker {
     peripherals: Mutex<HashMap<String, Peripheral>>,
     notify_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
     subs: Mutex<HashSet<(String, String)>>, // (device id, characteristic uuid)
-    known: Mutex<Vec<Remembered>>,
+    pub known: Mutex<Vec<Remembered>>,
     connecting: Mutex<HashSet<String>>,
     /// One lock per device so only one connect runs at a time (see `connect`).
     #[allow(dead_code)]
     conn_locks: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
     pending: Mutex<Option<Pending>>,
     /// Addon ids that currently let the page use their devices (see `ble_release`).
-    released: Mutex<HashSet<String>>,
+    pub released: Mutex<HashSet<String>>,
     store: PathBuf,
 }
 
@@ -576,7 +588,7 @@ impl Broker {
         Ok(())
     }
 
-    async fn resolve(&self, id: Option<String>) {
+    pub async fn resolve(&self, id: Option<String>) {
         if let Some(p) = self.pending.lock().await.as_mut() {
             if let Some(tx) = p.tx.take() {
                 let _ = tx.send(id);
@@ -1461,7 +1473,7 @@ fn logged<T>(what: &str, id: &str, r: Result<T, String>) -> Result<T, String> {
 
 pub struct Ble(pub Option<Arc<Broker>>);
 
-fn broker<'a>(s: &'a State<'_, Ble>) -> Result<&'a Arc<Broker>, String> {
+pub fn broker<'a>(s: &'a State<'_, Ble>) -> Result<&'a Arc<Broker>, String> {
     s.0.as_ref().ok_or_else(|| "no bluetooth adapter available".to_string())
 }
 

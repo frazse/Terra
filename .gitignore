@@ -3,6 +3,8 @@
 /gen/android/build/
 /gen/android/local.properties
 /gen/android/.gradle/
+/electron/dist/
+/electron/node_modules/
 /addons/*
 !/addons/.gitkeep
 release.keystore

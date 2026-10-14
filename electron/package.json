@@ -1,0 +1,46 @@
+{
+  "name": "terra-desktop",
+  "version": "0.4.0",
+  "description": "Terra Desktop - Biketerra Companion App (Chromium)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --linux appimage"
+  },
+  "author": "frazse",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.frazse.terra",
+    "productName": "Terra",
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "../target/release/terra",
+        "to": "bin/terra"
+      },
+      {
+        "from": "../shim",
+        "to": "shim"
+      },
+      {
+        "from": "../addons",
+        "to": "addons"
+      }
+    ],
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Sports"
+    }
+  }
+}

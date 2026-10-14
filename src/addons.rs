@@ -229,9 +229,17 @@ fn load_one(path: &Path, folder: &str) -> Result<Option<Addon>, String> {
 }
 
 #[derive(Serialize)]
+pub struct AddonScript {
+    pub id: String,
+    pub code: String,
+}
+
+#[derive(Serialize)]
 pub struct Activation {
-    started: Vec<String>,
-    stop: Vec<String>,
+    pub started: Vec<String>,
+    pub stop: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<AddonScript>,
 }
 
 /// Called by the page loader on load and on every URL change. Rescans the addon folders (so edits
@@ -239,8 +247,8 @@ pub struct Activation {
 #[tauri::command]
 pub async fn addons_activate(app: AppHandle, url: String, active: Vec<String>) -> Activation {
     let addons = load_all(&app);
-    let mut res = Activation { started: vec![], stop: vec![] };
-    let Some(w) = app.get_webview_window("main") else { return res };
+    let mut res = Activation { started: vec![], stop: vec![], scripts: vec![] };
+    let w_opt = app.get_webview_window("main");
 
     for a in &addons {
         if a.enabled && a.hits(&url) && !active.contains(&a.id) {
@@ -249,8 +257,13 @@ pub async fn addons_activate(app: AppHandle, url: String, active: Vec<String>) -
                 "window.__terraAddons && window.__terraAddons.start({meta}, async function(terra){{\n{}\n}});",
                 a.js
             );
-            if w.eval(code).is_ok() {
+            if let Some(ref w) = w_opt {
+                if w.eval(&code).is_ok() {
+                    res.started.push(a.id.clone());
+                }
+            } else {
                 res.started.push(a.id.clone());
+                res.scripts.push(AddonScript { id: a.id.clone(), code });
             }
         }
     }
