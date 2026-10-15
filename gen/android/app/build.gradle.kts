@@ -54,9 +54,7 @@ android {
             if (ksFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
-            optimization {
-               enable = true
-            }
+            isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") {
                   include("**/*.pro")
