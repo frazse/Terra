@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -11,6 +11,7 @@ app.commandLine.appendSwitch('enable-zero-copy');
 let mainWindow;
 let rustProcess;
 let reqId = 1;
+let powerBlockerId = null;
 const pendingRpc = new Map();
 
 function startRustProcess() {
@@ -156,6 +157,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Prevent display sleep, dimming, and screensaver while Terra is running
+  powerBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+  console.log('[electron] Activated power save blocker (id:', powerBlockerId, ')');
+
   startRustProcess();
   createWindow();
 
@@ -167,6 +172,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
+    powerSaveBlocker.stop(powerBlockerId);
+  }
   if (rustProcess) {
     rustProcess.kill();
   }
