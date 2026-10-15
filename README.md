@@ -1,5 +1,8 @@
 # Terra 🚲
 
+> [!NOTE]
+> **Disclaimer**: Terra is an independent, community-developed open-source project. It is **in no way affiliated with, endorsed by, or associated with [Biketerra.com](https://biketerra.com)**.
+
 **Terra** is an open-source, cross-platform companion application and web runtime for **[Biketerra.com](https://biketerra.com)**, built using **Rust**, **Electron Chromium** (Linux Desktop), and **Kotlin** (Android).
 
 It brings native Web Bluetooth LE integration, immersive fullscreen display, and a userscript-style Addon ecosystem to Android mobile devices, tablets, and Linux desktops (x86_64).
