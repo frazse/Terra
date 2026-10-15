@@ -30,13 +30,14 @@ function startRustProcess() {
     return;
   }
 
-  // Ensure binary is executable (+x) on Linux and macOS
+  // Ensure binary is executable (+x) on Linux and macOS if not already set
   if (process.platform !== 'win32') {
     try {
-      fs.chmodSync(binaryPath, 0o755);
-    } catch (err) {
-      console.error('[electron] Failed to set chmod +x on binary:', err);
-    }
+      const stats = fs.statSync(binaryPath);
+      if ((stats.mode & 0o111) === 0) {
+        fs.chmodSync(binaryPath, 0o755);
+      }
+    } catch (_) {}
   }
 
   console.log('[electron] Spawning real Rust BLE & Addons backend:', binaryPath);

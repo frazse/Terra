@@ -75,7 +75,7 @@ npm run dist
 
 The output AppImage will be generated at:
 ```text
-electron/dist/Terra-0.4.0.AppImage
+electron/dist/Terra-0.4.1.AppImage
 ```
 
 To run in development mode:
