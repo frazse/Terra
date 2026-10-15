@@ -29,6 +29,15 @@ function startRustProcess() {
     return;
   }
 
+  // Ensure binary is executable (+x) on Linux and macOS
+  if (process.platform !== 'win32') {
+    try {
+      fs.chmodSync(binaryPath, 0o755);
+    } catch (err) {
+      console.error('[electron] Failed to set chmod +x on binary:', err);
+    }
+  }
+
   console.log('[electron] Spawning real Rust BLE & Addons backend:', binaryPath);
   rustProcess = spawn(binaryPath, ['--rpc']);
 
