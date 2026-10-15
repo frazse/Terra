@@ -4,6 +4,17 @@
   window.__terraBtShim = true;
 
   const call = (cmd, args) => {
+    if (window.cefQuery) {
+      return new Promise((resolve, reject) => {
+        window.cefQuery({
+          request: JSON.stringify({ cmd, args }),
+          onSuccess: (res) => {
+            try { resolve(JSON.parse(res)); } catch { resolve(res); }
+          },
+          onFailure: (errCode, errMsg) => reject(errMsg)
+        });
+      });
+    }
     const T = window.__TAURI_INTERNALS__;
     return T ? T.invoke(cmd, args) : Promise.reject('Terra IPC unavailable');
   };

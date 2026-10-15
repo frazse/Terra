@@ -573,6 +573,9 @@ impl Broker {
     }
 
     fn open_chooser(self: &Arc<Self>) -> Result<(), String> {
+        if self.app.get_webview_window("main").is_none() {
+            return Ok(());
+        }
         let win = WebviewWindowBuilder::new(&self.app, "chooser", WebviewUrl::App("chooser.html".into()))
             .title("Select Bluetooth device")
             .inner_size(420.0, 520.0)
