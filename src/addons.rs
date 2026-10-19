@@ -92,8 +92,8 @@ pub struct Addon {
     settings: Vec<SettingDef>,
     /// Manifest default (`"enabled": false` = off until the user turns it on).
     default_enabled: bool,
-    /// Effective state: the user's choice in the Terra cog menu, else the manifest default.
-    pub enabled: bool,
+        /// Effective state: the user's choice in the Terra cog menu, else the manifest default.
+        pub enabled: bool,
 }
 
 impl Addon {
@@ -104,9 +104,9 @@ impl Addon {
 
 fn valid_id(s: &str) -> bool {
     !s.is_empty()
-        && s.len() <= 64
-        && !s.starts_with('.')
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    && s.len() <= 64
+    && !s.starts_with('.')
+    && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 fn safe_rel(f: &str) -> bool {
@@ -193,14 +193,14 @@ pub fn load_all(app: &AppHandle) -> Vec<Addon> {
 
 fn read_files(dir: &Path, files: &[String]) -> Result<Vec<String>, String> {
     files
-        .iter()
-        .map(|f| {
-            if !safe_rel(f) {
-                return Err(format!("bad file path '{f}'"));
-            }
-            fs::read_to_string(dir.join(f)).map_err(|e| format!("{f}: {e}"))
-        })
-        .collect()
+    .iter()
+    .map(|f| {
+        if !safe_rel(f) {
+            return Err(format!("bad file path '{f}'"));
+        }
+        fs::read_to_string(dir.join(f)).map_err(|e| format!("{f}: {e}"))
+    })
+    .collect()
 }
 
 fn load_one(path: &Path, folder: &str) -> Result<Option<Addon>, String> {
@@ -215,16 +215,16 @@ fn load_one(path: &Path, folder: &str) -> Result<Option<Addon>, String> {
     let settings: Vec<SettingDef> = m.settings.into_iter().filter(|d| valid_id(&d.key)).collect();
     Ok(Some(Addon {
         name: m.name.unwrap_or_else(|| id.clone()),
-        version: m.version.unwrap_or_else(|| "0.0.0".into()),
-        description: m.description.unwrap_or_default(),
-        id,
-        matches: m.matches,
-        js,
-        css,
-        connect: m.connect,
-        settings,
-        default_enabled: m.enabled,
-        enabled: m.enabled,
+            version: m.version.unwrap_or_else(|| "0.0.0".into()),
+            description: m.description.unwrap_or_default(),
+            id,
+            matches: m.matches,
+            js,
+            css,
+            connect: m.connect,
+            settings,
+            default_enabled: m.enabled,
+                enabled: m.enabled,
     }))
 }
 
@@ -255,7 +255,7 @@ pub async fn addons_activate(app: AppHandle, url: String, active: Vec<String>) -
             let meta = json!({ "id": a.id, "name": a.name, "version": a.version, "css": a.css });
             let code = format!(
                 "window.__terraAddons && window.__terraAddons.start({meta}, async function(terra){{\n{}\n}});",
-                a.js
+                               a.js
             );
             if let Some(ref w) = w_opt {
                 if w.eval(&code).is_ok() {
@@ -291,9 +291,9 @@ impl AddonStore {
     pub fn new(dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&dir);
         let overrides = fs::read_to_string(dir.join(STATE_FILE))
-            .ok()
-            .and_then(|s| serde_json::from_str::<HashMap<String, bool>>(&s).ok())
-            .unwrap_or_default();
+        .ok()
+        .and_then(|s| serde_json::from_str::<HashMap<String, bool>>(&s).ok())
+        .unwrap_or_default();
         let settings_dir = dir.join("settings");
         let _ = fs::create_dir_all(&settings_dir);
         Self {
@@ -319,9 +319,9 @@ impl AddonStore {
         let path = self.settings_dir.join(format!("{id}.json"));
         let m = cache.entry(id.to_string()).or_insert_with(|| {
             fs::read_to_string(&path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default()
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
         });
         let r = f(m);
         if write {
@@ -339,8 +339,8 @@ impl AddonStore {
     fn setting_value(&self, id: &str, def: &SettingDef) -> Option<Value> {
         let stored = self.settings_access(id, false, |m| m.get(&def.key).cloned()).ok().flatten();
         stored
-            .or_else(|| def.default.clone())
-            .filter(|v| !v.is_null() && !matches!(v, Value::String(s) if s.is_empty()))
+        .or_else(|| def.default.clone())
+        .filter(|v| !v.is_null() && !matches!(v, Value::String(s) if s.is_empty()))
     }
 
     /// Replaces `{{setting:KEY}}` with the stored value (secrets included). Done here, in Rust, so that
@@ -355,12 +355,12 @@ impl AddonStore {
             let j = after.find("}}").ok_or("unterminated {{setting:...}} placeholder")?;
             let key = &after[..j];
             let def = defs
-                .iter()
-                .find(|d| d.key == key)
-                .ok_or_else(|| format!("unknown setting '{key}'"))?;
+            .iter()
+            .find(|d| d.key == key)
+            .ok_or_else(|| format!("unknown setting '{key}'"))?;
             let v = self
-                .setting_value(id, def)
-                .ok_or_else(|| format!("setting '{}' is not set", def.name()))?;
+            .setting_value(id, def)
+            .ok_or_else(|| format!("setting '{}' is not set", def.name()))?;
             match v {
                 Value::String(s) => out.push_str(&s),
                 other => out.push_str(&other.to_string()),
@@ -378,7 +378,7 @@ impl AddonStore {
         let mut g = self.overrides.lock().map_err(|e| e.to_string())?;
         g.insert(id.to_string(), enabled);
         fs::write(self.dir.join(STATE_FILE), serde_json::to_string_pretty(&*g).unwrap_or_default())
-            .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())
     }
 
     fn access<R>(&self, id: &str, write: bool, f: impl FnOnce(&mut Map<String, Value>) -> R) -> Result<R, String> {
@@ -389,9 +389,9 @@ impl AddonStore {
         let path = self.dir.join(format!("{id}.json"));
         let m = cache.entry(id.to_string()).or_insert_with(|| {
             fs::read_to_string(&path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default()
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
         });
         let r = f(m);
         if write {
@@ -432,8 +432,8 @@ pub struct AddonInfo {
     matches: Vec<String>,
     enabled: bool,
     default_enabled: bool,
-    settings: Vec<SettingDef>,
-    connect: Vec<String>,
+        settings: Vec<SettingDef>,
+        connect: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -449,19 +449,19 @@ pub async fn addons_list(app: AppHandle) -> AddonList {
         version: app.package_info().version.to_string(),
         dirs: addon_dirs(&app).iter().map(|d| d.display().to_string()).collect(),
         addons: load_all(&app)
-            .into_iter()
-            .map(|a| AddonInfo {
-                id: a.id,
-                name: a.name,
-                version: a.version,
-                description: a.description,
-                matches: a.matches,
-                enabled: a.enabled,
-                default_enabled: a.default_enabled,
+        .into_iter()
+        .map(|a| AddonInfo {
+            id: a.id,
+            name: a.name,
+            version: a.version,
+            description: a.description,
+            matches: a.matches,
+            enabled: a.enabled,
+            default_enabled: a.default_enabled,
                 settings: a.settings,
                 connect: a.connect,
-            })
-            .collect(),
+        })
+        .collect(),
     }
 }
 
@@ -512,10 +512,10 @@ pub async fn addon_settings_set(
     let addons = load_all(&app);
     let a = addons.iter().find(|a| a.id == id).ok_or("unknown addon")?;
     let d = a
-        .settings
-        .iter()
-        .find(|d| d.key == key)
-        .ok_or_else(|| format!("unknown setting '{key}'"))?;
+    .settings
+    .iter()
+    .find(|d| d.key == key)
+    .ok_or_else(|| format!("unknown setting '{key}'"))?;
     let v: Option<Value> = match (d.kind.as_str(), &value) {
         (_, Value::Null) => None,
         (_, Value::String(s)) if s.is_empty() => None,
@@ -555,7 +555,7 @@ pub struct HttpReq {
     body: Option<String>,
     basic: Option<BasicAuth>,
     form: Option<FormSpec>,
-    timeout_ms: Option<u64>,
+        timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -584,6 +584,7 @@ pub struct FilePart {
 #[derive(Serialize)]
 pub struct HttpResp {
     status: u16,
+    headers: HashMap<String, Vec<String>>,
     body: String,
 }
 
@@ -593,9 +594,9 @@ pub struct HttpResp {
 pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: String, req: HttpReq) -> Result<HttpResp, String> {
     let addons = load_all(&app);
     let a = addons
-        .iter()
-        .find(|a| a.id == addon && a.enabled)
-        .ok_or("unknown or disabled addon")?;
+    .iter()
+    .find(|a| a.id == addon && a.enabled)
+    .ok_or("unknown or disabled addon")?;
     let ex = |s: &str| store.expand(&addon, &a.settings, s);
 
     let url = reqwest::Url::parse(&ex(&req.url)?).map_err(err)?;
@@ -609,10 +610,10 @@ pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: Str
 
     let method = reqwest::Method::from_bytes(req.method.as_deref().unwrap_or("GET").to_uppercase().as_bytes()).map_err(err)?;
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(req.timeout_ms.unwrap_or(60_000)))
-        .redirect(reqwest::redirect::Policy::none()) // a redirect could leave the allowed hosts
-        .build()
-        .map_err(err)?;
+    .timeout(Duration::from_millis(req.timeout_ms.unwrap_or(60_000)))
+    .redirect(reqwest::redirect::Policy::none()) // a redirect could leave the allowed hosts
+    .build()
+    .map_err(err)?;
     let mut rb = client.request(method, url);
     for (k, v) in &req.headers {
         rb = rb.header(k.as_str(), ex(v)?);
@@ -637,8 +638,17 @@ pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: Str
 
     let resp = rb.send().await.map_err(err)?;
     let status = resp.status().as_u16();
+    let mut headers: HashMap<String, Vec<String>> = HashMap::new();
+    for (k, v) in resp.headers().iter() {
+        if let Ok(val_str) = v.to_str() {
+            headers
+            .entry(k.as_str().to_lowercase())
+            .or_default()
+            .push(val_str.to_string());
+        }
+    }
     let body = resp.text().await.map_err(err)?;
-    Ok(HttpResp { status, body })
+    Ok(HttpResp { status, headers, body })
 }
 
 // ---------- terra.files: save a file to Downloads/Terra (the webview can't do <a download>) ----------
@@ -649,25 +659,25 @@ pub async fn addon_save_file(app: AppHandle, addon: String, filename: String, ba
         return Err("unknown or disabled addon".into());
     }
     let clean: String = filename
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
-        .collect();
+    .chars()
+    .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+    .collect();
     let clean = clean.trim_start_matches('.').to_string(); // no hidden files
     let ext = Path::new(&clean)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    .extension()
+    .and_then(|e| e.to_str())
+    .unwrap_or("")
+    .to_lowercase();
     if clean.is_empty() || clean.len() > 120 || !["fit", "gpx", "tcx", "json", "csv", "txt"].contains(&ext.as_str()) {
         return Err("file name or type not allowed".into());
     }
     let bytes = B64.decode(base64).map_err(err)?;
     let dir = app
-        .path()
-        .download_dir()
-        .or_else(|_| app.path().home_dir())
-        .map_err(err)?
-        .join("Terra");
+    .path()
+    .download_dir()
+    .or_else(|_| app.path().home_dir())
+    .map_err(err)?
+    .join("Terra");
     fs::create_dir_all(&dir).map_err(err)?;
     let stem = Path::new(&clean).file_stem().and_then(|s| s.to_str()).unwrap_or("file").to_string();
     let mut path = dir.join(&clean);
