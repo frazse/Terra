@@ -6,39 +6,40 @@ const SHIM: &str = include_str!("../shim/bluetooth-shim.js");
 const LOADER: &str = include_str!("../shim/addons-loader.js");
 const UI: &str = include_str!("../shim/terra-ui.js");
 
+#[cfg_attr(target_os = "android", tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            ble::ble_request_device,
-            ble::ble_connect,
-            ble::ble_disconnect,
-            ble::ble_forget,
-            ble::ble_remembered,
-            ble::ble_release,
-            ble::ble_read,
-            ble::ble_write,
-            ble::ble_subscribe,
-            ble::ble_unsubscribe,
-            ble::chooser_candidates,
-            ble::chooser_pick,
-            ble::chooser_cancel,
-            addons::addons_activate,
-            addons::addon_storage_get,
-            addons::addon_storage_set,
-            addons::addon_storage_remove,
-            addons::addons_list,
-            addons::addons_set_enabled,
-            addons::addon_settings_get,
-            addons::addon_settings_set,
-            addons::addon_http,
-            addons::addon_save_file,
+            crate::ble::ble_request_device,
+            crate::ble::ble_connect,
+            crate::ble::ble_disconnect,
+            crate::ble::ble_forget,
+            crate::ble::ble_remembered,
+            crate::ble::ble_release,
+            crate::ble::ble_read,
+            crate::ble::ble_write,
+            crate::ble::ble_subscribe,
+            crate::ble::ble_unsubscribe,
+            crate::ble::chooser_candidates,
+            crate::ble::chooser_pick,
+            crate::ble::chooser_cancel,
+            crate::addons::addons_activate,
+            crate::addons::addon_storage_get,
+            crate::addons::addon_storage_set,
+            crate::addons::addon_storage_remove,
+            crate::addons::addons_list,
+            crate::addons::addons_set_enabled,
+            crate::addons::addon_settings_get,
+            crate::addons::addon_settings_set,
+            crate::addons::addon_http,
+            crate::addons::addon_save_file,
         ])
         .setup(|app| {
             let handle = app.handle();
 
             // Initialize BLE broker (best-effort; non-fatal if unavailable)
-            let ble_opt = match tauri::async_runtime::block_on(ble::Broker::new(handle.clone())) {
-                Ok(b) => Some(ble::Ble(b)),
+            let ble_opt = match tauri::async_runtime::block_on(crate::ble::Broker::new(handle.clone())) {
+                Ok(b) => Some(crate::ble::Ble(Some(b))),
                 Err(e) => {
                     eprintln!("[terra] BLE unavailable: {e}");
                     None
@@ -47,14 +48,14 @@ pub fn run() {
             handle.manage(ble_opt);
 
             // Initialize addon store
-            let data = ble::get_terra_storage_dir(&handle);
-            handle.manage(addons::AddonStore::new(data.join("addon-data")));
+            let data = crate::ble::get_terra_storage_dir(&handle);
+            handle.manage(crate::addons::AddonStore::new(data.join("addon-data")));
 
             // Log addon directories and loaded addons
-            for dir in addons::addon_dirs(&handle) {
+            for dir in crate::addons::addon_dirs(&handle) {
                 println!("[terra] addon dir: {}", dir.display());
             }
-            for a in addons::load_all(&handle) {
+            for a in crate::addons::load_all(&handle) {
                 println!("[terra] addon: {} v{} ({}){}", a.name, a.version, a.id, if a.enabled { "" } else { " [disabled]" });
             }
 
@@ -65,7 +66,7 @@ pub fn run() {
                 let app_handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
                     #[cfg(target_os = "linux")]
-                    rpc::run_rpc_server(app_handle).await;
+                    crate::rpc::run_rpc_server(app_handle).await;
                 });
             } else {
                 // Normal mode: create the webview window
