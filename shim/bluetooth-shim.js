@@ -7,6 +7,7 @@
     const T = window.__TAURI_INTERNALS__;
     return T ? T.invoke(cmd, args) : Promise.reject('Terra IPC unavailable');
   };
+
   const log = (kind, detail) => {
     console.log('[terra-bt]', kind, detail);
     try { call('shim_log', { kind, detail: detail ?? null }).catch(() => {}); } catch {}

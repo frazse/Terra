@@ -6,10 +6,16 @@ const SHIM: &str = include_str!("../shim/bluetooth-shim.js");
 const LOADER: &str = include_str!("../shim/addons-loader.js");
 const UI: &str = include_str!("../shim/terra-ui.js");
 
+#[tauri::command]
+fn shim_log(kind: String, detail: serde_json::Value) {
+    println!("[shim] {kind}: {detail}");
+}
+
 #[cfg_attr(target_os = "android", tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            shim_log,
             crate::ble::ble_request_device,
             crate::ble::ble_connect,
             crate::ble::ble_disconnect,
@@ -38,14 +44,14 @@ pub fn run() {
             let handle = app.handle();
 
             // Initialize BLE broker (best-effort; non-fatal if unavailable)
-            let ble_opt = match tauri::async_runtime::block_on(crate::ble::Broker::new(handle.clone())) {
-                Ok(b) => Some(crate::ble::Ble(Some(b))),
+            let broker = match tauri::async_runtime::block_on(crate::ble::Broker::new(handle.clone())) {
+                Ok(b) => Some(b),
                 Err(e) => {
                     eprintln!("[terra] BLE unavailable: {e}");
                     None
                 }
             };
-            handle.manage(ble_opt);
+            handle.manage(crate::ble::Ble(broker));
 
             // Initialize addon store
             let data = crate::ble::get_terra_storage_dir(&handle);

@@ -133,25 +133,33 @@ fn js_event(event: &str, data: Value) {
 }
 
 /// Call `window.__terra.<func>(...args)` in the biketerra webview.
-/// On Linux (RPC mode), always falls through to stdout JSON events.
-fn js(_app: Option<&AppHandle>, func: &str, args: Vec<Value>) {
+#[cfg(not(target_os = "linux"))]
+fn js(app: &AppHandle, func: &str, args: Vec<Value>) {
+    let a: Vec<String> = args.iter().map(|v| v.to_string()).collect();
+    let code = format!("window.__terra && window.__terra.{func}({})", a.join(","));
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(code);
+    }
+}
+
+/// On Linux (RPC mode), writes a js_eval event to stdout for main.js to handle.
+#[cfg(target_os = "linux")]
+fn js(app_opt: Option<&AppHandle>, func: &str, args: Vec<Value>) {
     let a: Vec<String> = args.iter().map(|v| v.to_string()).collect();
     let code = format!("window.__terra && window.__terra.{func}({})", a.join(","));
     // On Linux, get_webview_window always returns None → falls through to stdout.
-    // On other platforms, this evaluates JS directly in the webview.
-    if let Some(w) = _app.and_then(|a| a.get_webview_window("main")) {
-        let _ = w.eval(code);
-    } else {
-        let evt = serde_json::json!({
-            "event": "js_eval",
-            "code": code
-        });
-        if let Ok(line) = serde_json::to_string(&evt) {
-            use std::io::Write;
-            let mut out = std::io::stdout().lock();
-            let _ = writeln!(out, "{line}");
-            let _ = out.flush();
-        }
+    if let Some(w) = app_opt.and_then(|a| a.get_webview_window("main")) {
+        let _ = w.eval(code.clone());
+    }
+    let evt = serde_json::json!({
+        "event": "js_eval",
+        "code": code
+    });
+    if let Ok(line) = serde_json::to_string(&evt) {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
     }
 }
 
@@ -1081,7 +1089,7 @@ pub unsafe extern "C" fn Java_dev_frazse_terra_BleManager_notifyValueJni(
     if let Ok(guard) = ANDROID_APP.lock() {
         if let Some(app) = guard.as_ref() {
             js(
-                Some(app),
+                app,
                 "notify",
                 vec![
                     json!(addr_str),
@@ -1111,7 +1119,7 @@ pub unsafe extern "C" fn Java_dev_frazse_terra_BleManager_notifyDisconnectedJni(
     let addr_str: String = env.get_string(&addr_jstr).map(|s| s.into()).unwrap_or_default();
     if let Ok(guard) = ANDROID_APP.lock() {
         if let Some(app) = guard.as_ref() {
-            js(Some(app), "disconnected", vec![json!(addr_str)]);
+            js(app, "disconnected", vec![json!(addr_str)]);
         }
     }
 }
@@ -1274,12 +1282,12 @@ impl Broker {
     }
 
     fn open_chooser(self: &Arc<Self>) -> Result<(), String> {
-        js(Some(&self.app), "showChooserModal", vec![]);
+        js(&self.app, "showChooserModal", vec![]);
         Ok(())
     }
 
     async fn resolve(&self, id: Option<String>) {
-        js(Some(&self.app), "hideChooserModal", vec![]);
+        js(&self.app, "hideChooserModal", vec![]);
         let tx = {
             let mut pend = self.pending.lock().await;
             pend.take().and_then(|mut p| p.tx.take())
