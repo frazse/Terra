@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.2] — Linux Desktop (Electron) Bluetooth Fix
+## [0.5.0] — Linux Desktop (Electron) Runtime & Bluetooth Fix
 
 ### Changed
 - **Replaced Tauri runtime on Linux with lightweight custom runtime** — Linux desktop now uses a custom runtime (`src/linux_runtime.rs`) instead of Tauri's webkit2gtk/GTK dependency. The binary runs only as an RPC backend (`--rpc`) and Electron handles the webview. This eliminates the heavy GTK dependency chain on Linux and makes the Linux build faster and lighter. The Android and other desktop builds continue to use Tauri unchanged.

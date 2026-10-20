@@ -1,6 +1,6 @@
 {
   "name": "terra-desktop",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Terra Desktop - Biketerra Companion App (Chromium)",
   "main": "main.js",
   "scripts": {
