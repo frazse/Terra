@@ -13,7 +13,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
+#[cfg(not(target_os = "linux"))]
 use tauri::{AppHandle, Manager, State};
+#[cfg(target_os = "linux")]
+use crate::linux_runtime::{AppHandle, State};
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -141,6 +144,21 @@ fn glob(pat: &str, text: &str) -> bool {
 }
 
 /// `TERRA_ADDONS_DIR` (path list) overrides; default is `<app data>/addons` and `./addons`.
+#[cfg(target_os = "linux")]
+pub fn addon_dirs(_app: &AppHandle) -> Vec<PathBuf> {
+    if let Some(v) = std::env::var_os("TERRA_ADDONS_DIR") {
+        return std::env::split_paths(&v).collect();
+    }
+    let mut d = vec![];
+    let dir = crate::ble::get_terra_storage_dir();
+    d.push(dir.join("addons"));
+    if let Ok(c) = std::env::current_dir() {
+        d.push(c.join("addons"));
+    }
+    d
+}
+
+#[cfg(not(target_os = "linux"))]
 pub fn addon_dirs(app: &AppHandle) -> Vec<PathBuf> {
     if let Some(v) = std::env::var_os("TERRA_ADDONS_DIR") {
         return std::env::split_paths(&v).collect();
@@ -154,6 +172,36 @@ pub fn addon_dirs(app: &AppHandle) -> Vec<PathBuf> {
     d
 }
 
+#[cfg(target_os = "linux")]
+pub fn load_all(_app: &AppHandle) -> Vec<Addon> {
+    let mut out: Vec<Addon> = vec![];
+    for dir in addon_dirs(_app) {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let path = e.path();
+            let folder = e.file_name().to_string_lossy().to_string();
+            if !path.is_dir() || folder.starts_with('_') || folder.starts_with('.') {
+                continue;
+            }
+            match load_one(&path, &folder) {
+                Ok(Some(a)) => {
+                    if out.iter().any(|x| x.id == a.id) {
+                        eprintln!("[terra] addon '{}': duplicate id, skipped ({})", a.id, path.display());
+                    } else {
+                        out.push(a);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("[terra] addon '{folder}': {e}"),
+            }
+        }
+    }
+    out
+}
+
+#[cfg(not(target_os = "linux"))]
 pub fn load_all(app: &AppHandle) -> Vec<Addon> {
     let mut out: Vec<Addon> = vec![];
     for dir in addon_dirs(app) {
@@ -244,7 +292,7 @@ pub struct Activation {
 
 /// Called by the page loader on load and on every URL change. Rescans the addon folders (so edits
 /// apply on reload), evaluates addons that now match, and reports addons that should be stopped.
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addons_activate(app: AppHandle, url: String, active: Vec<String>) -> Activation {
     let addons = load_all(&app);
     let mut res = Activation { started: vec![], stop: vec![], scripts: vec![] };
@@ -258,7 +306,7 @@ pub async fn addons_activate(app: AppHandle, url: String, active: Vec<String>) -
                                a.js
             );
             if let Some(ref w) = w_opt {
-                if w.eval(&code).is_ok() {
+                if w.eval(code.clone()).is_ok() {
                     res.started.push(a.id.clone());
                 }
             } else {
@@ -277,12 +325,13 @@ pub async fn addons_activate(app: AppHandle, url: String, active: Vec<String>) -
 
 // ---------- per-addon persistent storage ----------
 
+#[derive(Clone)]
 pub struct AddonStore {
     dir: PathBuf,
-    cache: Mutex<HashMap<String, Map<String, Value>>>,
-    overrides: Mutex<HashMap<String, bool>>,
+    cache: std::sync::Arc<Mutex<HashMap<String, Map<String, Value>>>>,
+    overrides: std::sync::Arc<Mutex<HashMap<String, bool>>>,
     settings_dir: PathBuf,
-    settings: Mutex<HashMap<String, Map<String, Value>>>,
+    settings: std::sync::Arc<Mutex<HashMap<String, Map<String, Value>>>>,
 }
 
 const STATE_FILE: &str = ".addons-state.json"; // leading '.' can never collide with an addon id
@@ -298,10 +347,10 @@ impl AddonStore {
         let _ = fs::create_dir_all(&settings_dir);
         Self {
             dir,
-            cache: Mutex::new(HashMap::new()),
-            overrides: Mutex::new(overrides),
+            cache: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            overrides: std::sync::Arc::new(Mutex::new(overrides)),
             settings_dir,
-            settings: Mutex::new(HashMap::new()),
+            settings: std::sync::Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -401,19 +450,19 @@ impl AddonStore {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub fn addon_storage_get(store: State<'_, AddonStore>, id: String, key: String) -> Result<Option<Value>, String> {
     store.access(&id, false, |m| m.get(&key).cloned())
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub fn addon_storage_set(store: State<'_, AddonStore>, id: String, key: String, value: Value) -> Result<(), String> {
     store.access(&id, true, |m| {
         m.insert(key, value);
     })
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub fn addon_storage_remove(store: State<'_, AddonStore>, id: String, key: String) -> Result<(), String> {
     store.access(&id, true, |m| {
         m.remove(&key);
@@ -443,7 +492,7 @@ pub struct AddonList {
     addons: Vec<AddonInfo>,
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addons_list(app: AppHandle) -> AddonList {
     AddonList {
         version: app.package_info().version.to_string(),
@@ -465,7 +514,7 @@ pub async fn addons_list(app: AppHandle) -> AddonList {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub fn addons_set_enabled(store: State<'_, AddonStore>, id: String, enabled: bool) -> Result<(), String> {
     store.set_enabled(&id, enabled)
 }
@@ -481,7 +530,7 @@ pub struct SettingsView {
     secrets_set: Vec<String>,
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addon_settings_get(app: AppHandle, store: State<'_, AddonStore>, id: String) -> Result<SettingsView, String> {
     let addons = load_all(&app);
     let a = addons.iter().find(|a| a.id == id).ok_or("unknown addon")?;
@@ -501,7 +550,7 @@ pub async fn addon_settings_get(app: AppHandle, store: State<'_, AddonStore>, id
 }
 
 /// An empty string or null removes the value (the manifest default applies again).
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addon_settings_set(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -590,7 +639,7 @@ pub struct HttpResp {
 
 /// https only, and only to hosts in the addon's manifest `connect` list. `{{setting:KEY}}` placeholders in the
 /// url, header values, body, basic auth and form fields are filled in here from the addon's settings.
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: String, req: HttpReq) -> Result<HttpResp, String> {
     let addons = load_all(&app);
     let a = addons
@@ -653,7 +702,7 @@ pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: Str
 
 // ---------- terra.files: save a file to Downloads/Terra (the webview can't do <a download>) ----------
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addon_save_file(app: AppHandle, addon: String, filename: String, base64: String) -> Result<String, String> {
     if !load_all(&app).iter().any(|a| a.id == addon && a.enabled) {
         return Err("unknown or disabled addon".into());

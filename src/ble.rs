@@ -13,7 +13,10 @@ use std::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(not(target_os = "linux"))]
 use tauri::{AppHandle, Manager as _, State};
+#[cfg(target_os = "linux")]
+use crate::linux_runtime::{AppHandle, State};
 use tokio::{
     sync::{oneshot, Mutex},
     time::timeout,
@@ -29,8 +32,16 @@ use btleplug::api::{
 use btleplug::platform::{Adapter, Manager, Peripheral};
 #[cfg(not(target_os = "android"))]
 use futures::StreamExt;
-#[cfg(not(target_os = "android"))]
+
+/// Platform-agnostic task spawn (tauri on non-Linux, tokio on Linux).
+#[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
+use tauri::async_runtime::spawn as spawn_task;
+#[cfg(all(not(target_os = "android"), target_os = "linux"))]
+use crate::linux_runtime::async_runtime::spawn as spawn_task;
+#[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
 use tauri::{async_runtime::JoinHandle, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+#[cfg(all(not(target_os = "android"), target_os = "linux"))]
+use crate::linux_runtime::async_runtime::JoinHandle;
 #[cfg(not(target_os = "android"))]
 use tokio::time::sleep;
 
@@ -110,11 +121,25 @@ fn describe(chr: &Uuid, b: &[u8]) -> String {
     }
 }
 
+/// Emit a JSON event to stdout (for the RPC layer to forward to the webview).
+fn js_event(event: &str, data: Value) {
+    let evt = serde_json::json!({ "event": event, "data": data });
+    if let Ok(line) = serde_json::to_string(&evt) {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
+    }
+}
+
 /// Call `window.__terra.<func>(...args)` in the biketerra webview.
-fn js(app: &AppHandle, func: &str, args: Vec<Value>) {
+/// On Linux (RPC mode), always falls through to stdout JSON events.
+fn js(_app: Option<&AppHandle>, func: &str, args: Vec<Value>) {
     let a: Vec<String> = args.iter().map(|v| v.to_string()).collect();
     let code = format!("window.__terra && window.__terra.{func}({})", a.join(","));
-    if let Some(w) = app.get_webview_window("main") {
+    // On Linux, get_webview_window always returns None → falls through to stdout.
+    // On other platforms, this evaluates JS directly in the webview.
+    if let Some(w) = _app.and_then(|a| a.get_webview_window("main")) {
         let _ = w.eval(code);
     } else {
         let evt = serde_json::json!({
@@ -299,7 +324,8 @@ struct Pending {
 
 #[cfg(not(target_os = "android"))]
 pub struct Broker {
-    app: AppHandle,
+    /// `None` on Linux (RPC mode has no webview); `Some` on other platforms.
+    app: Option<AppHandle>,
     adapter: Adapter,
     peripherals: Mutex<HashMap<String, Peripheral>>,
     notify_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
@@ -317,7 +343,7 @@ pub struct Broker {
 
 #[cfg(not(target_os = "android"))]
 impl Broker {
-    pub async fn new(app: AppHandle) -> Result<Arc<Self>, String> {
+    pub async fn new(app: Option<AppHandle>) -> Result<Arc<Self>, String> {
         let manager = Manager::new().await.map_err(err)?;
         let adapter = manager
             .adapters()
@@ -327,7 +353,10 @@ impl Broker {
             .next()
             .ok_or("no bluetooth adapter found")?;
 
-        let dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+        #[cfg(target_os = "linux")]
+        let dir = crate::linux_runtime::xdg_data_home().join("terra");
+        #[cfg(not(target_os = "linux"))]
+        let dir = app.as_ref().unwrap().path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
         let _ = std::fs::create_dir_all(&dir);
         let store = dir.join("devices.json");
         let known: Vec<Remembered> = std::fs::read_to_string(&store)
@@ -337,7 +366,7 @@ impl Broker {
         println!("[terra] {} remembered device(s), store: {}", known.len(), store.display());
 
         let b = Arc::new(Self {
-            app,
+            app: app,
             adapter,
             peripherals: Mutex::new(HashMap::new()),
             notify_tasks: Mutex::new(HashMap::new()),
@@ -356,7 +385,7 @@ impl Broker {
 
     fn spawn_event_loop(self: &Arc<Self>) {
         let me = self.clone();
-        tauri::async_runtime::spawn(async move {
+        spawn_task(async move {
             if let Ok(mut events) = me.adapter.events().await {
                 while let Some(ev) = events.next().await {
                     if let CentralEvent::DeviceDisconnected(id) = ev {
@@ -365,7 +394,9 @@ impl Broker {
                         if let Some(t) = me.notify_tasks.lock().await.remove(&id) {
                             t.abort();
                         }
-                        js(&me.app, "disconnected", vec![json!(id)]);
+                        // Use js() which on Linux (app is None) writes a js_eval event to stdout.
+                        // main.js handles js_eval by executing JS directly in the webview.
+                        js(me.app.as_ref(), "disconnected", vec![json!(id)]);
                     }
                 }
             }
@@ -374,7 +405,7 @@ impl Broker {
 
     fn spawn_supervisor(self: &Arc<Self>) {
         let me = self.clone();
-        tauri::async_runtime::spawn(async move {
+        spawn_task(async move {
             let mut scanning = false;
             loop {
                 sleep(Duration::from_secs(3)).await;
@@ -401,7 +432,7 @@ impl Broker {
                         let visible = matches!(p.properties().await, Ok(Some(ref pr)) if pr.rssi.is_some());
                         if visible && me.connecting.lock().await.insert(k.id.clone()) {
                             let (me2, p2, id) = (me.clone(), p.clone(), k.id.clone());
-                            tauri::async_runtime::spawn(async move {
+                            spawn_task(async move {
                                 let r = timeout(Duration::from_secs(20), async {
                                     p2.connect().await?;
                                     p2.discover_services().await
@@ -550,8 +581,10 @@ impl Broker {
 
         self.pending.lock().await.take();
         let _ = self.adapter.stop_scan().await;
-        if let Some(w) = self.app.get_webview_window("chooser") {
-            let _ = w.close();
+        if let Some(ref app) = self.app {
+            if let Some(w) = app.get_webview_window("chooser") {
+                let _ = w.close();
+            }
         }
 
         let Ok(Ok(Some(id))) = res else {
@@ -572,8 +605,9 @@ impl Broker {
         Ok(info)
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn open_chooser(self: &Arc<Self>) -> Result<(), String> {
-        let win = WebviewWindowBuilder::new(&self.app, "chooser", WebviewUrl::App("chooser.html".into()))
+        let win = WebviewWindowBuilder::new(self.app.as_ref().unwrap(), "chooser", WebviewUrl::App("chooser.html".into()))
             .title("Select Bluetooth device")
             .inner_size(420.0, 520.0)
             .build()
@@ -582,9 +616,17 @@ impl Broker {
         win.on_window_event(move |ev| {
             if let WindowEvent::Destroyed = ev {
                 let me = me.clone();
-                tauri::async_runtime::spawn(async move { me.resolve(None).await });
+                spawn_task(async move { me.resolve(None).await });
             }
         });
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn open_chooser(&self) -> Result<(), String> {
+        // On Linux (RPC mode), use js() which writes a js_eval event to stdout.
+        // main.js handles js_eval by executing JS directly in the webview.
+        js(self.app.as_ref(), "showChooserModal", vec![]);
         Ok(())
     }
 
@@ -643,10 +685,10 @@ impl Broker {
 
         let mut stream = p.notifications().await.map_err(err)?;
         let (app, did) = (self.app.clone(), id.to_string());
-        let handle = tauri::async_runtime::spawn(async move {
+        let handle = spawn_task(async move {
             while let Some(n) = stream.next().await {
                 js(
-                    &app,
+                    app.as_ref(),
                     "notify",
                     vec![json!(did), json!(n.uuid.to_string()), json!(B64.encode(&n.value))],
                 );
@@ -1039,7 +1081,7 @@ pub unsafe extern "C" fn Java_dev_frazse_terra_BleManager_notifyValueJni(
     if let Ok(guard) = ANDROID_APP.lock() {
         if let Some(app) = guard.as_ref() {
             js(
-                app,
+                Some(app),
                 "notify",
                 vec![
                     json!(addr_str),
@@ -1069,7 +1111,7 @@ pub unsafe extern "C" fn Java_dev_frazse_terra_BleManager_notifyDisconnectedJni(
     let addr_str: String = env.get_string(&addr_jstr).map(|s| s.into()).unwrap_or_default();
     if let Ok(guard) = ANDROID_APP.lock() {
         if let Some(app) = guard.as_ref() {
-            js(app, "disconnected", vec![json!(addr_str)]);
+            js(Some(app), "disconnected", vec![json!(addr_str)]);
         }
     }
 }
@@ -1083,6 +1125,20 @@ struct RawDiscoveredDevice {
     services: Option<Vec<String>>,
 }
 
+/// Resolve the Terra storage directory.
+/// On Android: uses the app's external files dir.
+/// On Linux: uses XDG data home (`~/.local/share/terra`).
+/// On other platforms: uses Tauri's app_data_dir.
+#[cfg(target_os = "linux")]
+pub fn get_terra_storage_dir() -> PathBuf {
+    let dir = crate::linux_runtime::xdg_data_home().join("terra");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::create_dir_all(dir.join("addons"));
+    let _ = std::fs::create_dir_all(dir.join("addon-data"));
+    dir
+}
+
+#[cfg(not(target_os = "linux"))]
 pub fn get_terra_storage_dir(app: &AppHandle) -> PathBuf {
     #[cfg(target_os = "android")]
     {
@@ -1218,12 +1274,12 @@ impl Broker {
     }
 
     fn open_chooser(self: &Arc<Self>) -> Result<(), String> {
-        js(&self.app, "showChooserModal", vec![]);
+        js(Some(&self.app), "showChooserModal", vec![]);
         Ok(())
     }
 
     async fn resolve(&self, id: Option<String>) {
-        js(&self.app, "hideChooserModal", vec![]);
+        js(Some(&self.app), "hideChooserModal", vec![]);
         let tx = {
             let mut pend = self.pending.lock().await;
             pend.take().and_then(|mut p| p.tx.take())
@@ -1471,13 +1527,14 @@ fn logged<T>(what: &str, id: &str, r: Result<T, String>) -> Result<T, String> {
 
 // ---------- tauri commands ----------
 
+#[derive(Clone)]
 pub struct Ble(pub Option<Arc<Broker>>);
 
 pub fn broker<'a>(s: &'a State<'_, Ble>) -> Result<&'a Arc<Broker>, String> {
     s.0.as_ref().ok_or_else(|| "no bluetooth adapter available".to_string())
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_request_device(
     state: State<'_, Ble>,
     filters: Vec<Filter>,
@@ -1492,7 +1549,7 @@ pub async fn ble_request_device(
 }
 
 /// Devices an addon paired earlier (so it can restore them without any UI).
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_remembered(state: State<'_, Ble>, owner: String) -> Result<Vec<DeviceInfo>, String> {
     let b = broker(&state)?;
     let known = b.known.lock().await;
@@ -1505,7 +1562,7 @@ pub async fn ble_remembered(state: State<'_, Ble>, owner: String) -> Result<Vec<
 
 /// Let the page (not just the owning addon) use the owner's devices, e.g. so Biketerra's own
 /// Zwift Ride support can take the controller during rides. Not persisted: addons set it per page load.
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_release(state: State<'_, Ble>, owner: String, released: bool) -> Result<(), String> {
     let b = broker(&state)?;
     let mut r = b.released.lock().await;
@@ -1517,29 +1574,29 @@ pub async fn ble_release(state: State<'_, Ble>, owner: String, released: bool) -
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_connect(state: State<'_, Ble>, id: String) -> Result<Vec<ServiceInfo>, String> {
     let r = broker(&state)?.connect(&id).await;
     logged("connect", &id, r)
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_disconnect(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.disconnect(&id).await
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_forget(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.forget(&id).await
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_read(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<String, String> {
     let r = broker(&state)?.read(&id, &service, &characteristic).await;
     logged(&format!("read {characteristic}"), &id, r)
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_write(
     state: State<'_, Ble>,
     id: String,
@@ -1552,30 +1609,30 @@ pub async fn ble_write(
     logged(&format!("write {characteristic}"), &id, r)
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_subscribe(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<(), String> {
     let r = broker(&state)?.subscribe(&id, &service, &characteristic, true).await;
     logged(&format!("subscribe {characteristic}"), &id, r)
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_unsubscribe(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<(), String> {
     let r = broker(&state)?.subscribe(&id, &service, &characteristic, false).await;
     logged(&format!("unsubscribe {characteristic}"), &id, r)
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn chooser_candidates(state: State<'_, Ble>) -> Result<Vec<Candidate>, String> {
     Ok(broker(&state)?.candidates().await)
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn chooser_pick(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.resolve(Some(id)).await;
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn chooser_cancel(state: State<'_, Ble>) -> Result<(), String> {
     broker(&state)?.resolve(None).await;
     Ok(())

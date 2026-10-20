@@ -39,8 +39,13 @@
       "preload.js"
     ],
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Sports"
     }
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
   }
 }

@@ -1,4 +1,10 @@
 fn main() {
+    // Skip Tauri build steps on Linux (RPC mode only, no webview)
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "linux" {
+        return;
+    }
+
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(
             tauri_build::AppManifest::new().commands(&[

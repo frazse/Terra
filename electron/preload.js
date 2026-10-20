@@ -13,6 +13,25 @@ window.__TAURI_INTERNALS__ = {
   }
 };
 
+// Listen for rust-event messages from main.js (Rust backend stdout events).
+// These carry chooser_open, ble_notify, etc. and are routed to window.__terra.
+ipcRenderer.on('rust-event', (event, msg) => {
+  if (!window.__terra) return;
+  try {
+    if (msg.event === 'chooser_open') {
+      window.__terra.showChooserModal();
+    } else if (msg.event === 'ble_notify') {
+      if (msg.type === 'disconnected' && msg.device) {
+        window.__terra.disconnected(msg.device);
+      } else if (msg.type === 'characteristic' && msg.device && msg.characteristic && msg.value) {
+        window.__terra.notify(msg.device, msg.characteristic, msg.value);
+      }
+    }
+  } catch (e) {
+    console.error('[terra-electron] rust-event handler error:', e);
+  }
+});
+
 try {
   const rootDir = path.join(__dirname, '..');
   let shimPath = path.join(rootDir, 'shim', 'bluetooth-shim.js');
