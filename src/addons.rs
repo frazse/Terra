@@ -172,36 +172,6 @@ pub fn addon_dirs(app: &AppHandle) -> Vec<PathBuf> {
     d
 }
 
-#[cfg(target_os = "linux")]
-pub fn load_all(_app: &AppHandle) -> Vec<Addon> {
-    let mut out: Vec<Addon> = vec![];
-    for dir in addon_dirs(_app) {
-        let Ok(rd) = fs::read_dir(&dir) else { continue };
-        let mut entries: Vec<_> = rd.flatten().collect();
-        entries.sort_by_key(|e| e.file_name());
-        for e in entries {
-            let path = e.path();
-            let folder = e.file_name().to_string_lossy().to_string();
-            if !path.is_dir() || folder.starts_with('_') || folder.starts_with('.') {
-                continue;
-            }
-            match load_one(&path, &folder) {
-                Ok(Some(a)) => {
-                    if out.iter().any(|x| x.id == a.id) {
-                        eprintln!("[terra] addon '{}': duplicate id, skipped ({})", a.id, path.display());
-                    } else {
-                        out.push(a);
-                    }
-                }
-                Ok(None) => {}
-                Err(e) => eprintln!("[terra] addon '{folder}': {e}"),
-            }
-        }
-    }
-    out
-}
-
-#[cfg(not(target_os = "linux"))]
 pub fn load_all(app: &AppHandle) -> Vec<Addon> {
     let mut out: Vec<Addon> = vec![];
     for dir in addon_dirs(app) {
