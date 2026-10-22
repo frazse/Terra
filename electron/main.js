@@ -150,6 +150,18 @@ function createWindow() {
   });
 
   mainWindow.setMenu(null);
+
+  // This app has no application menu, so wire the DevTools shortcut directly.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const isToggle = (input.control && input.shift &&
+      (input.code === 'KeyI' || (input.key || '').toLowerCase() === 'i')) || input.code === 'F12';
+    if (isToggle) {
+      event.preventDefault();
+      mainWindow.webContents.toggleDevTools({ mode: 'detach' });
+    }
+  });
+
   mainWindow.loadURL('https://biketerra.com');
 
   mainWindow.on('closed', () => {
