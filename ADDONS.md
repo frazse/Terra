@@ -42,8 +42,26 @@ The addon starts when the URL matches (also after SPA navigation) and is cleaned
 | `terra.ble.setShared(on)` | let the page (not only this addon) use the devices this addon paired, e.g. so Biketerra's own Zwift Ride support can take the controller. Resets on every page load, so set it each time |
 | `terra.ble.remembered()` | devices this addon paired earlier, as `BluetoothDevice`s, no UI. Call `device.gatt.connect()` on them |
 | `terra.ble.devices()` | `[{id, name, connected}]` known to the page |
+| `terra.ride.onRide(cb)` | live ride data, ~2Hz (see [Live ride data](#live-ride-data)). Returns a cleanup fn |
+| `terra.ride.latest()` | the newest broadcast frame (in-page, immediate — works even before any round-trip) |
+| `terra.ride.history(limit?)` | async, the last ~5 min of frames from the Rust backend (or `limit` of them), oldest to newest |
 | `terra.keys.down / up / tap(key, ms?, {target?})` | synthetic KeyboardEvents (default target: active element) |
 | `terra.ui.addStyle(css)` | injects CSS (CSP-safe), removed on cleanup |
 
 `navigator.bluetooth` also works inside addons (Terra's shim), so addons can pair and talk to their
 own devices with the normal Web Bluetooth API. Remembered devices pair instantly, new ones open the chooser.
+
+## Live ride data
+While riding or spectating, Biketerra broadcasts the ride state at ~2Hz
+(see <https://biketerra.com/help-center/live-broadcast-data>). Terra listens on that channel, relays
+every frame to the Rust backend (which keeps the latest frame plus ~5 min of history), and emits each
+frame on the bus (topic `biketerra:ride`). Addons use `terra.ride.onRide(cb)` for live updates,
+`terra.ride.latest()` for the newest frame, and `terra.ride.history(limit?)` for a window of past
+frames. Frame shape:
+
+    {
+      "ego":     { speed, speedAvg, power, powerAvg, wkg, cadence, heartRate, distance,
+                   distanceRemaining, climb, elevation, grade, lat, lng, ... },
+      "riders":  [{ id, name, power, wkg, speed, cadence, heartRate, gap, lapCount }, ...],
+      "timestamp": 1776951073587
+    }

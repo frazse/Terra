@@ -1,5 +1,6 @@
 mod addons;
 mod ble;
+mod ride;
 
 #[cfg(target_os = "linux")]
 mod linux_runtime;

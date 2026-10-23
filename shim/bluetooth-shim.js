@@ -471,7 +471,29 @@
     if (!d) { d = new TerraBluetoothDevice(info); devices.set(info.id, d); }
     return d;
   };
-  window.__terraCore = { call, log, devices, bus, toB64, toDV, deviceFor };
+  // ---- ride broadcast data ----
+  // While riding or spectating, Biketerra broadcasts the ride state on
+  // BroadcastChannel('biketerra-ride') at ~2Hz (biketerra.com/help-center/live-broadcast-data).
+  // Relay every frame to the Rust backend (it keeps the latest + a few minutes of history),
+  // and emit it on the shared bus so addons can listen with zero round-trip.
+  const ride = { latest: null, updatedAt: 0 };
+  let lastPushErr = 0;
+  if (typeof BroadcastChannel === 'function') {
+    try {
+      ride.channel = new BroadcastChannel('biketerra-ride');
+      ride.channel.onmessage = (e) => {
+        ride.latest = e.data;
+        ride.updatedAt = Date.now();
+        bus.emit('biketerra:ride', e.data);
+        call('ride_push', { data: e.data }).catch((err) => {
+          const now = Date.now();
+          if (now - lastPushErr > 5000) { lastPushErr = now; log('ride-push', String(err)); }
+        });
+      };
+    } catch (e) { log('ride-channel', String(e)); ride.channel = null; }
+  }
+
+  window.__terraCore = { call, log, devices, bus, toB64, toDV, deviceFor, ride };
 
   Object.defineProperty(navigator, 'bluetooth', { value: bluetooth, configurable: true });
   log('shim-installed', { url: location.href });

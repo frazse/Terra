@@ -82,6 +82,17 @@
       http: { request: (req) => core.call('addon_http', { addon: meta.id, req }) },
       // Saves bytes (Uint8Array) to ~/Downloads/Terra; resolves to the saved path.
       files: { save: (filename, bytes) => core.call('addon_save_file', { addon: meta.id, filename, base64: core.toB64(bytes) }) },
+      // Biketerra's ride broadcast, relayed to the Rust backend (which keeps a ~5 min history).
+      // Frame: { ego: {speed, power, cadence, heartRate, ...}, riders: [...], timestamp }, plus
+      // whatever else the page broadcasts. help-center/live-broadcast-data.
+      ride: {
+        // Most recent frame (in-page, immediate).
+        latest: () => (core.ride && core.ride.latest) || null,
+        // Live updates, ~2Hz. Returns a cleanup fn.
+        onRide: (cb) => on('biketerra:ride', cb),
+        // Up to ~5 min of frames, oldest to newest; `limit` caps the count.
+        history: async (limit) => (await core.call('ride_history', { limit: limit == null ? null : limit })) ?? [],
+      },
       bus: { on, emit: (topic, data) => bus.emit(topic, data) },
       ble: {
         devices: () => [...core.devices.values()].map((d) => ({ id: d.id, name: d.name, connected: d.gatt.connected })),

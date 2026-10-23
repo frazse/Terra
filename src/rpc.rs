@@ -281,6 +281,26 @@ async fn dispatch_rpc_command(
             Ok(json!(null))
         }
 
+        "ride_push" => {
+            let store: State<'_, crate::ride::Ride> = app.state();
+            let data = args_val.get("data").cloned().unwrap_or(json!(null));
+            crate::ride::ride_push(store, data);
+            Ok(json!(null))
+        }
+
+        "ride_latest" => {
+            let store: State<'_, crate::ride::Ride> = app.state();
+            let res = crate::ride::ride_latest(store);
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+
+        "ride_history" => {
+            let store: State<'_, crate::ride::Ride> = app.state();
+            let limit = args_val.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let res = crate::ride::ride_history(store, limit);
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+
         _ => Err(format!("Unknown RPC command: {cmd}")),
     }
 }

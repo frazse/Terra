@@ -9,6 +9,9 @@ pub fn run() {
     let data_dir = crate::ble::get_terra_storage_dir();
     app.manage(crate::addons::AddonStore::new(data_dir.join("addon-data")));
 
+    // Initialize ride broadcast data (relayed from the page at ~2Hz)
+    app.manage(crate::ride::Ride::new());
+
     // Log addon directories and loaded addons
     for dir in crate::addons::addon_dirs(&app) {
         println!("[terra] addon dir: {}", dir.display());
