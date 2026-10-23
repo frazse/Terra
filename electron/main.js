@@ -8,6 +8,17 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-zero-copy');
 
+// Force the Vulkan graphics pipeline on Linux (AMD RDNA-3: without these the
+// default ANGLE path renders with artifacts). Equivalent to enabling the
+// chrome://flags entries #enable-vulkan, #default-angle-vulkan and
+// #vulkan-from-angle at app startup.
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch(
+    'enable-features',
+    'Vulkan,DefaultANGLEVulkan,VulkanFromANGLE'
+  );
+}
+
 let mainWindow;
 let rustProcess;
 let reqId = 1;

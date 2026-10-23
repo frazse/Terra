@@ -6,7 +6,7 @@ const fs = require('fs');
 async function main() {
   console.log('[terra-electron] Downloading Electron binary for Linux x64...');
   const zipPath = await downloadArtifact({
-    version: '33.4.11',
+    version: '44.9.3',
     artifactName: 'electron',
     platform: 'linux',
     arch: 'x64'
