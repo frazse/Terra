@@ -39,6 +39,7 @@ pub fn run() {
             crate::addons::addon_settings_set,
             crate::addons::addon_http,
             crate::addons::addon_save_file,
+            crate::addons::addon_udp_send,
             crate::ride::ride_push,
             crate::ride::ride_latest,
             crate::ride::ride_history,

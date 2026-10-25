@@ -82,6 +82,10 @@
       http: { request: (req) => core.call('addon_http', { addon: meta.id, req }) },
       // Saves bytes (Uint8Array) to ~/Downloads/Terra; resolves to the saved path.
       files: { save: (filename, bytes) => core.call('addon_save_file', { addon: meta.id, filename, base64: core.toB64(bytes) }) },
+      // Fire-and-forget UDP datagram to `host:port` (e.g. a bike computer on the local Wi-Fi).
+      // `target` may contain `{{setting:KEY}}` placeholders; `payload` is JSON.stringify'd if not a string.
+      // Resolves to the number of bytes sent (UDP is connectionless: unreachable hosts don't error here).
+      udp: { send: (target, payload) => core.call('addon_udp_send', { addon: meta.id, target, payload: typeof payload === 'string' ? payload : JSON.stringify(payload) }) },
       // Biketerra's ride broadcast, relayed to the Rust backend (which keeps a ~5 min history).
       // Frame: { ego: {speed, power, cadence, heartRate, ...}, riders: [...], timestamp }, plus
       // whatever else the page broadcasts. help-center/live-broadcast-data.

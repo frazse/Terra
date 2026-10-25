@@ -708,3 +708,37 @@ pub async fn addon_save_file(app: AppHandle, addon: String, filename: String, ba
     fs::write(&path, bytes).map_err(err)?;
     Ok(path.display().to_string())
 }
+
+// ---------- terra.udp: fire-and-forget UDP datagram (e.g. a bike computer on the local Wi-Fi) ----------
+
+/// Send a single UDP datagram to `host:port` (or `hostname:port`). `{{setting:KEY}}` placeholders in
+/// `target` are expanded from the addon's settings. Resolves to the number of bytes sent.
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+pub async fn addon_udp_send(
+    app: AppHandle,
+    store: State<'_, AddonStore>,
+    addon: String,
+    target: String,
+    payload: String,
+) -> Result<u32, String> {
+    if payload.len() > 65_507 {
+        return Err("payload exceeds the UDP datagram limit (65507 bytes)".into());
+    }
+    let addons = load_all(&app);
+    let a = addons
+        .iter()
+        .find(|a| a.id == addon && a.enabled)
+        .ok_or("unknown or disabled addon")?;
+    let expanded = store.expand(&addon, &a.settings, &target)?;
+    let addr: std::net::SocketAddr = match expanded.parse() {
+        Ok(a) => a,
+        Err(_) => {
+            // Not an IP literal: resolve the hostname (tokio's lookup_host accepts "host:port" too).
+            let mut it = tokio::net::lookup_host(&expanded).await.map_err(err)?;
+            it.next().ok_or_else(|| format!("could not resolve target '{expanded}'"))?
+        }
+    };
+    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.map_err(err)?;
+    let sent = socket.send_to(payload.as_bytes(), addr).await.map_err(err)?;
+    Ok(sent as u32)
+}

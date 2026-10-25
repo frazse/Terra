@@ -47,6 +47,7 @@ The addon starts when the URL matches (also after SPA navigation) and is cleaned
 | `terra.ride.history(limit?)` | async, the last ~5 min of frames from the Rust backend (or `limit` of them), oldest to newest |
 | `terra.keys.down / up / tap(key, ms?, {target?})` | synthetic KeyboardEvents (default target: active element) |
 | `terra.ui.addStyle(css)` | injects CSS (CSP-safe), removed on cleanup |
+| `terra.udp.send(target, payload)` | fire-and-forget UDP datagram to `host` or `ip:port` (≤ 65507 bytes); `target` may contain `{{setting:KEY}}` placeholders; resolves to bytes sent. Great for reaching a bike computer on the local Wi-Fi |
 
 `navigator.bluetooth` also works inside addons (Terra's shim), so addons can pair and talk to their
 own devices with the normal Web Bluetooth API. Remembered devices pair instantly, new ones open the chooser.

@@ -154,6 +154,15 @@ async fn dispatch_rpc_command(
             Ok(json!(path))
         }
 
+        "addon_udp_send" => {
+            let store: State<'_, crate::addons::AddonStore> = app.state();
+            let addon = args_val.get("addon").and_then(|v| v.as_str()).ok_or("missing addon")?.to_string();
+            let target = args_val.get("target").and_then(|v| v.as_str()).ok_or("missing target")?.to_string();
+            let payload = args_val.get("payload").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let sent = crate::addons::addon_udp_send(app.clone(), store, addon, target, payload).await?;
+            Ok(json!(sent))
+        }
+
         "ble_request_device" => {
             let ble_state: State<'_, crate::ble::Ble> = app.state();
             let broker = crate::ble::broker(&ble_state)?;
