@@ -191,6 +191,13 @@ async fn dispatch_rpc_command(
             Ok(json!(null))
         }
 
+        "ble_disconnect_all" => {
+            let ble_state: State<'_, crate::ble::Ble> = app.state();
+            let broker = crate::ble::broker(&ble_state)?;
+            broker.disconnect_all().await?;
+            Ok(json!(null))
+        }
+
         "ble_forget" => {
             let ble_state: State<'_, crate::ble::Ble> = app.state();
             let broker = crate::ble::broker(&ble_state)?;

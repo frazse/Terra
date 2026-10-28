@@ -19,6 +19,7 @@ pub fn run() {
             crate::ble::ble_request_device,
             crate::ble::ble_connect,
             crate::ble::ble_disconnect,
+            crate::ble::ble_disconnect_all,
             crate::ble::ble_forget,
             crate::ble::ble_remembered,
             crate::ble::ble_release,

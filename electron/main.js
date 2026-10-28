@@ -102,44 +102,47 @@ function startRustProcess() {
   });
 }
 
-ipcMain.handle('tauri-invoke', async (event, payload) => {
-  const { cmd, args } = payload || {};
-  if (!cmd) return null;
+// Send one command to the Rust backend over stdio. Resolves with the result,
+// or with { __error: message } if the backend reports an error.
+function sendRpc(cmd, args) {
+  if (!rustProcess || !rustProcess.stdin.writable) {
+    return Promise.reject(new Error('Rust backend process not running'));
+  }
+  const id = reqId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (pendingRpc.has(id)) {
+        pendingRpc.delete(id);
+        reject(new Error(`RPC timeout for command: ${cmd}`));
+      }
+    }, 30000);
 
-  if (rustProcess && rustProcess.stdin.writable) {
-    const id = reqId++;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (pendingRpc.has(id)) {
-          pendingRpc.delete(id);
-          reject(new Error(`RPC timeout for command: ${cmd}`));
-        }
-      }, 30000);
-
-      pendingRpc.set(id, {
-        resolve: (val) => {
-          clearTimeout(timer);
-          if (cmd === 'addons_activate' && val && Array.isArray(val.scripts) && mainWindow) {
-            for (const s of val.scripts) {
-              if (s.code) {
-                mainWindow.webContents.executeJavaScript(s.code).catch((e) => console.error('[addon-exec-error]', e));
-              }
+    pendingRpc.set(id, {
+      resolve: (val) => {
+        clearTimeout(timer);
+        if (cmd === 'addons_activate' && val && Array.isArray(val.scripts) && mainWindow) {
+          for (const s of val.scripts) {
+            if (s.code) {
+              mainWindow.webContents.executeJavaScript(s.code).catch((e) => console.error('[addon-exec-error]', e));
             }
           }
-          resolve(val);
-        },
-        reject: (err) => {
-          clearTimeout(timer);
-          resolve({ __error: err.message || String(err) });
         }
-      });
-
-      const reqStr = JSON.stringify({ id, cmd, args }) + '\n';
-      rustProcess.stdin.write(reqStr);
+        resolve(val);
+      },
+      reject: (err) => {
+        clearTimeout(timer);
+        resolve({ __error: err.message || String(err) });
+      }
     });
-  } else {
-    throw new Error('Rust backend process not running');
-  }
+
+    rustProcess.stdin.write(JSON.stringify({ id, cmd, args: args || {} }) + '\n');
+  });
+}
+
+ipcMain.handle('tauri-invoke', (event, payload) => {
+  const { cmd, args } = payload || {};
+  if (!cmd) return null;
+  return sendRpc(cmd, args);
 });
 
 function createWindow() {
@@ -195,11 +198,19 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
   if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
     powerSaveBlocker.stop(powerBlockerId);
   }
   if (rustProcess) {
+    // Tear down all BLE connections inside the Rust process before killing it,
+    // so devices don't stay connected to the host. Bounded by the 30s RPC timeout.
+    try {
+      const r = await sendRpc('ble_disconnect_all', {});
+      if (r && r.__error) console.error('[electron] ble_disconnect_all failed:', r.__error);
+    } catch (e) {
+      console.error('[electron] ble_disconnect_all failed:', e);
+    }
     rustProcess.kill();
   }
   if (process.platform !== 'darwin') {

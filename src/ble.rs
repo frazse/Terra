@@ -505,6 +505,26 @@ impl Broker {
         self.save_known(&k);
     }
 
+    /// Disconnect every paired peripheral and stop all notification tasks.
+    /// Called once when the app is shutting down (see `ble_disconnect_all`).
+    pub async fn disconnect_all(&self) -> Result<(), String> {
+        let peripherals = self.peripherals.lock().await.clone();
+        for (id, p) in &peripherals {
+            match p.disconnect().await {
+                Ok(()) => println!("[ble] shutdown: disconnected {id}"),
+                Err(e) => eprintln!("[ble] shutdown: disconnect {id} failed: {e}"),
+            }
+        }
+        let mut nt = self.notify_tasks.lock().await;
+        for (id, t) in nt.drain() {
+            t.abort();
+            println!("[ble] shutdown: aborted notify task {id}");
+        }
+        self.subs.lock().await.clear();
+        self.peripherals.lock().await.clear();
+        Ok(())
+    }
+
     pub async fn forget(&self, id: &str) -> Result<(), String> {
         {
             let mut k = self.known.lock().await;
@@ -1514,6 +1534,16 @@ impl Broker {
         self.save_known(&k);
     }
 
+    /// No-op counterpart of the desktop `disconnect_all`: Android reclaims GATT
+    /// connections when the app is destroyed, and we have no list of handles here.
+    pub async fn disconnect_all(&self) -> Result<(), String> {
+        let ids = self.known.lock().await.iter().map(|k| k.id.clone()).collect::<Vec<_>>();
+        for id in ids {
+            let _ = self.disconnect(&id).await;
+        }
+        Ok(())
+    }
+
     pub async fn forget(&self, id: &str) -> Result<(), String> {
         {
             let mut k = self.known.lock().await;
@@ -1591,6 +1621,11 @@ pub async fn ble_connect(state: State<'_, Ble>, id: String) -> Result<Vec<Servic
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn ble_disconnect(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.disconnect(&id).await
+}
+
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+pub async fn ble_disconnect_all(state: State<'_, Ble>) -> Result<(), String> {
+    broker(&state)?.disconnect_all().await
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
