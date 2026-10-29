@@ -881,7 +881,11 @@ pub async fn addon_tcp_connect(
     let _ = stream.set_nodelay(true);
 
     let reg: State<'_, TcpRegistry> = app.state();
-    let id = format!("tcp{}", reg.0.next.fetch_add(1, Ordering::Relaxed));
+    // Snapshot an owned registry (clone of the shared Arc) up front: on tauri,
+    // `State` borrows `app`, and the spawned tasks below must not capture that
+    // borrow — they only need the registry itself.
+    let reg0 = (*reg).clone();
+    let id = format!("tcp{}", reg0.0.next.fetch_add(1, Ordering::Relaxed));
     let peer = addr.to_string();
     let reader_addon = a.id.clone();
     let (reader, writer) = stream.into_split();
@@ -891,7 +895,7 @@ pub async fn addon_tcp_connect(
     // Writer: drains the send queue onto the socket.
     {
         let app_w = app.clone();
-        let reg_w = reg.clone();
+        let reg_w = reg0.clone();
         let id_w = id.clone();
         tokio::spawn(async move {
             let mut w = writer;
@@ -908,7 +912,7 @@ pub async fn addon_tcp_connect(
     // Reader: bytes in -> bus events; EOF/error -> `closed` event exactly once.
     {
         let app_r = app.clone();
-        let reg_r = reg.clone();
+        let reg_r = reg0.clone();
         let id_r = id.clone();
         let addon_r = reader_addon.clone();
         tokio::spawn(async move {
