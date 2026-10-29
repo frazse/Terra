@@ -41,6 +41,10 @@ pub fn run() {
             crate::addons::addon_http,
             crate::addons::addon_save_file,
             crate::addons::addon_udp_send,
+            crate::addons::addon_tcp_connect,
+            crate::addons::addon_tcp_send,
+            crate::addons::addon_tcp_list,
+            crate::addons::addon_tcp_close,
             crate::ride::ride_push,
             crate::ride::ride_latest,
             crate::ride::ride_history,
@@ -61,6 +65,9 @@ pub fn run() {
             // Initialize addon store
             let data = crate::ble::get_terra_storage_dir(&handle);
             handle.manage(crate::addons::AddonStore::new(data.join("addon-data")));
+
+            // TCP connection registry (terra.tcp)
+            handle.manage(crate::addons::TcpRegistry::new());
 
             // Initialize ride broadcast data (relayed from the page at ~2Hz)
             handle.manage(crate::ride::Ride::new());

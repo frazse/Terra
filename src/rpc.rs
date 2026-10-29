@@ -163,6 +163,37 @@ async fn dispatch_rpc_command(
             Ok(json!(sent))
         }
 
+        "addon_tcp_connect" => {
+            let store: State<'_, crate::addons::AddonStore> = app.state();
+            let addon = args_val.get("addon").and_then(|v| v.as_str()).ok_or("missing addon")?.to_string();
+            let host = args_val.get("host").and_then(|v| v.as_str()).ok_or("missing host")?.to_string();
+            let port = args_val.get("port").and_then(|v| v.as_u64()).ok_or("missing port")? as u16;
+            let timeout_ms = args_val.get("timeoutMs").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let id = crate::addons::addon_tcp_connect(app.clone(), store, addon, host, port, timeout_ms).await?;
+            Ok(json!(id))
+        }
+
+        "addon_tcp_send" => {
+            let addon = args_val.get("addon").and_then(|v| v.as_str()).ok_or("missing addon")?.to_string();
+            let conn = args_val.get("conn").and_then(|v| v.as_str()).ok_or("missing conn")?.to_string();
+            let base64 = args_val.get("base64").and_then(|v| v.as_str()).ok_or("missing base64")?.to_string();
+            let sent = crate::addons::addon_tcp_send(app.clone(), addon, conn, base64).await?;
+            Ok(json!(sent))
+        }
+
+        "addon_tcp_list" => {
+            let addon = args_val.get("addon").and_then(|v| v.as_str()).ok_or("missing addon")?.to_string();
+            let list = crate::addons::addon_tcp_list(app.clone(), addon).await?;
+            serde_json::to_value(list).map_err(|e| e.to_string())
+        }
+
+        "addon_tcp_close" => {
+            let addon = args_val.get("addon").and_then(|v| v.as_str()).ok_or("missing addon")?.to_string();
+            let conn = args_val.get("conn").and_then(|v| v.as_str()).ok_or("missing conn")?.to_string();
+            crate::addons::addon_tcp_close(app.clone(), addon, conn).await?;
+            Ok(json!(null))
+        }
+
         "ble_request_device" => {
             let ble_state: State<'_, crate::ble::Ble> = app.state();
             let broker = crate::ble::broker(&ble_state)?;

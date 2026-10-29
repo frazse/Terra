@@ -12,6 +12,9 @@ pub fn run() {
     // Initialize ride broadcast data (relayed from the page at ~2Hz)
     app.manage(crate::ride::Ride::new());
 
+    // TCP connection registry (terra.tcp)
+    app.manage(crate::addons::TcpRegistry::new());
+
     // Log addon directories and loaded addons
     for dir in crate::addons::addon_dirs(&app) {
         println!("[terra] addon dir: {}", dir.display());

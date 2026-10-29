@@ -6,9 +6,13 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -741,4 +745,216 @@ pub async fn addon_udp_send(
     let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.map_err(err)?;
     let sent = socket.send_to(payload.as_bytes(), addr).await.map_err(err)?;
     Ok(sent as u32)
+}
+
+// ---------- terra.tcp: persistent TCP stream (e.g. a Wi-Fi trainer speaking a binary GATT protocol) ----------
+//
+// Unlike `udp.send` (fire-and-forget datagrams), a connection stays open: the addon connects once,
+// pushes raw frames with `send`, and receives inbound bytes as `tcp:rx:<addon>` bus events.
+// Framing is left to the addon — the core only moves bytes.
+
+/// One open connection: its write queue plus ownership so an addon can't use another addon's socket.
+#[derive(Clone)]
+struct TcpConn {
+    id: String,
+    addon: String,
+    peer: String, // resolved "a.b.c.d:port", for diagnostics
+    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+}
+
+#[derive(Clone)]
+pub struct TcpRegistry(Arc<Inner>);
+
+struct Inner {
+    next: AtomicUsize,
+    conns: tokio::sync::Mutex<HashMap<String, TcpConn>>,
+}
+
+impl TcpRegistry {
+    pub fn new() -> Self {
+        Self(Arc::new(Inner {
+            next: AtomicUsize::new(1),
+            conns: tokio::sync::Mutex::new(HashMap::new()),
+        }))
+    }
+    async fn get(&self, id: &str) -> Option<TcpConn> {
+        self.0.conns.lock().await.get(id).cloned()
+    }
+    async fn insert(&self, conn: TcpConn) {
+        self.0.conns.lock().await.insert(conn.id.clone(), conn);
+    }
+    /// Remove a connection; the first caller (read EOF, write failure, or explicit close)
+    /// is the one that emits the `closed` event.
+    async fn close(&self, id: &str) -> Option<TcpConn> {
+        self.0.conns.lock().await.remove(id)
+    }
+}
+
+/// Run a snippet in the page: the webview on non-Linux platforms, a stdout `js_eval`
+/// event in RPC mode (Linux), where electron forwards it via executeJavaScript.
+fn page_js(app: &AppHandle, code: String) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(code);
+        return;
+    }
+    if let Ok(line) = serde_json::to_string(&json!({ "event": "js_eval", "code": code })) {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
+    }
+}
+
+/// Emit a bus event the addon can subscribe to with `bus.on(topic, cb)`.
+fn page_bus(app: &AppHandle, topic: &str, payload: &Value) {
+    let code = format!(
+        "window.__terraCore && window.__terraCore.bus.emit({:?}, {})",
+        topic, payload
+    );
+    page_js(app, code);
+}
+
+/// The addon must exist and be enabled (same gate as the other terra.* network RPCs).
+fn require_addon(app: &AppHandle, addon: &str, enabled_only: bool) -> Result<(), String> {
+    let ok = load_all(app).iter().any(|a| a.id == addon && (!enabled_only || a.enabled));
+    if ok { Ok(()) } else { Err("unknown or disabled addon".into()) }
+}
+
+/// Open a TCP connection to `host:port`; resolves to a connection id.
+/// `{{setting:KEY}}` placeholders in `host` expand from the addon's settings;
+/// `timeout_ms` 0 = 3 s. Inbound bytes arrive as `tcp:rx:<addon>` events `{conn, b64}`;
+/// lifecycle as `tcp:state:<addon>` events `{conn, state, reason?}`.
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+pub async fn addon_tcp_connect(
+    app: AppHandle,
+    store: State<'_, AddonStore>,
+    addon: String,
+    host: String,
+    port: u16,
+    timeout_ms: u32,
+) -> Result<String, String> {
+    let addons = load_all(&app);
+    let a = addons.iter().find(|a| a.id == addon && a.enabled).ok_or("unknown or disabled addon")?;
+    let host = store.expand(&addon, &a.settings, &host)?;
+
+    let addr: std::net::SocketAddr = match format!("{host}:{port}").parse() {
+        Ok(a) => a,
+        Err(_) => {
+            let spec = format!("{host}:{port}");
+            let mut it = tokio::net::lookup_host(&spec).await.map_err(err)?;
+            it.next().ok_or_else(|| format!("could not resolve host '{host}'"))?
+        }
+    };
+    let timeout = Duration::from_millis(if timeout_ms == 0 { 3000 } else { (timeout_ms as u64).min(15_000) });
+    let stream = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| format!("connect to {host}:{port} timed out after {} ms", timeout.as_millis()))?
+        .map_err(err)?;
+    let _ = stream.set_nodelay(true);
+
+    let reg: State<'_, TcpRegistry> = app.state();
+    let id = format!("tcp{}", reg.0.next.fetch_add(1, Ordering::Relaxed));
+    let peer = addr.to_string();
+    let reader_addon = a.id.clone();
+    let (reader, writer) = stream.into_split();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    reg.insert(TcpConn { id: id.clone(), addon: a.id.clone(), peer: peer.clone(), tx }).await;
+
+    // Writer: drains the send queue onto the socket.
+    {
+        let app_w = app.clone();
+        let reg_w = reg.clone();
+        let id_w = id.clone();
+        tokio::spawn(async move {
+            let mut w = writer;
+            while let Some(bytes) = rx.recv().await {
+                if w.write_all(&bytes).await.is_err() || w.flush().await.is_err() {
+                    if let Some(c) = reg_w.close(&id_w).await {
+                        page_bus(&app_w, &format!("tcp:state:{}", c.addon), &json!({ "conn": id_w, "state": "error", "reason": "write failed" }));
+                    }
+                    break;
+                }
+            }
+        });
+    }
+    // Reader: bytes in -> bus events; EOF/error -> `closed` event exactly once.
+    {
+        let app_r = app.clone();
+        let reg_r = reg.clone();
+        let id_r = id.clone();
+        let addon_r = reader_addon.clone();
+        tokio::spawn(async move {
+            let mut r = reader;
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match r.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => page_bus(&app_r, &format!("tcp:rx:{addon_r}"), &json!({ "conn": id_r, "b64": B64.encode(&buf[..n]) })),
+                    Err(e) => {
+                        if let Some(c) = reg_r.close(&id_r).await {
+                            page_bus(&app_r, &format!("tcp:state:{}", c.addon), &json!({ "conn": id_r, "state": "error", "reason": e.to_string() }));
+                        }
+                        break;
+                    }
+                }
+            }
+            if let Some(c) = reg_r.close(&id_r).await {
+                page_bus(&app_r, &format!("tcp:state:{}", c.addon), &json!({ "conn": id_r, "state": "closed" }));
+            }
+        });
+    }
+
+    page_bus(&app, &format!("tcp:state:{addon}"), &json!({ "conn": id, "state": "connected", "peer": peer }));
+    Ok(id)
+}
+
+/// Write raw bytes (base64) onto connection `conn`; resolves to the byte count.
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+pub async fn addon_tcp_send(
+    app: AppHandle,
+    addon: String,
+    conn: String,
+    base64: String,
+) -> Result<u32, String> {
+    require_addon(&app, &addon, true)?;
+    let reg: State<'_, TcpRegistry> = app.state();
+    let c = reg.get(&conn).await.ok_or("unknown connection")?;
+    if c.addon != addon {
+        return Err("connection belongs to another addon".into());
+    }
+    let bytes = B64.decode(&base64).map_err(err)?;
+    c.tx.send(bytes.clone()).await.map_err(err)?;
+    Ok(bytes.len() as u32)
+}
+
+/// List this addon's open connections (diagnostics).
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+pub async fn addon_tcp_list(
+    app: AppHandle,
+    addon: String,
+) -> Result<Vec<Value>, String> {
+    require_addon(&app, &addon, false)?;
+    let reg: State<'_, TcpRegistry> = app.state();
+    let conns = reg.0.conns.lock().await;
+    Ok(conns.values().filter(|c| c.addon == addon).map(|c| json!({ "conn": c.id, "peer": c.peer })).collect())
+}
+
+/// Close this addon's connection and flush nothing; the peer sees EOF.
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+pub async fn addon_tcp_close(
+    app: AppHandle,
+    addon: String,
+    conn: String,
+) -> Result<(), String> {
+    require_addon(&app, &addon, false)?;
+    let reg: State<'_, TcpRegistry> = app.state();
+    if let Some(c) = reg.close(&conn).await {
+        if c.addon != addon {
+            // Not ours: hand it back rather than closing a foreign socket.
+            reg.insert(c).await;
+            return Err("connection belongs to another addon".into());
+        }
+        page_bus(&app, &format!("tcp:state:{addon}"), &json!({ "conn": conn, "state": "closed" }));
+    }
+    Ok(())
 }

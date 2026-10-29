@@ -86,6 +86,20 @@
       // `target` may contain `{{setting:KEY}}` placeholders; `payload` is JSON.stringify'd if not a string.
       // Resolves to the number of bytes sent (UDP is connectionless: unreachable hosts don't error here).
       udp: { send: (target, payload) => core.call('addon_udp_send', { addon: meta.id, target, payload: typeof payload === 'string' ? payload : JSON.stringify(payload) }) },
+      // Persistent TCP stream to a host on the LAN (e.g. a Wi-Fi trainer with a binary protocol).
+      // connect(host, port, timeoutMs) -> conn id; host may contain {{setting:KEY}} placeholders.
+      // send(conn, bytes) -> bytes written (bytes: Uint8Array); close(conn) -> EOF to the peer.
+      // Inbound bytes: onFrame(cb) with {conn, bytes: DataView}; lifecycle: onState(cb) with
+      // {conn, state: 'connected'|'closed'|'error', reason?, peer?}. The page is the only way in and out;
+      // framing is entirely up to the addon.
+      tcp: {
+        connect: (host, port, timeoutMs) => core.call('addon_tcp_connect', { addon: meta.id, host, port, timeoutMs: timeoutMs || 0 }),
+        send: (conn, bytes) => core.call('addon_tcp_send', { addon: meta.id, conn, base64: core.toB64(bytes) }),
+        close: (conn) => core.call('addon_tcp_close', { addon: meta.id, conn }),
+        list: () => core.call('addon_tcp_list', { addon: meta.id }),
+        onFrame: (cb) => on('tcp:rx:' + meta.id, (e) => cb({ conn: e.conn, bytes: core.toDV(e.b64) })),
+        onState: (cb) => on('tcp:state:' + meta.id, cb),
+      },
       // Biketerra's ride broadcast, relayed to the Rust backend (which keeps a ~5 min history).
       // Frame: { ego: {speed, power, cadence, heartRate, ...}, riders: [...], timestamp }, plus
       // whatever else the page broadcasts. help-center/live-broadcast-data.

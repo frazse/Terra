@@ -48,6 +48,12 @@ The addon starts when the URL matches (also after SPA navigation) and is cleaned
 | `terra.keys.down / up / tap(key, ms?, {target?})` | synthetic KeyboardEvents (default target: active element) |
 | `terra.ui.addStyle(css)` | injects CSS (CSP-safe), removed on cleanup |
 | `terra.udp.send(target, payload)` | fire-and-forget UDP datagram to `host` or `ip:port` (≤ 65507 bytes); `target` may contain `{{setting:KEY}}` placeholders; resolves to bytes sent. Great for reaching a bike computer on the local Wi-Fi |
+ | `terra.tcp.connect(host, port, timeoutMs?)` | open a persistent TCP stream; resolves to a connection id. `host` may contain `{{setting:KEY}}` placeholders; `timeoutMs` 0 = 3 s |
+ | `terra.tcp.send(conn, bytes)` | write raw bytes (a `Uint8Array` or `DataView`) onto the connection; resolves to bytes written |
+ | `terra.tcp.close(conn)` | close the connection (sends EOF to the peer) |
+ | `terra.tcp.list()` | this addon's open connections, `[{conn, peer}]` (diagnostics) |
+ | `terra.tcp.onFrame(cb)` | inbound bytes: `{conn, bytes: DataView}`. The page is the only door in and out; framing is the addon's job |
+ | `terra.tcp.onState(cb)` | lifecycle: `{conn, state: 'connected' | 'closed' | 'error', reason?, peer?}` |
 
 `navigator.bluetooth` also works inside addons (Terra's shim), so addons can pair and talk to their
 own devices with the normal Web Bluetooth API. Remembered devices pair instantly, new ones open the chooser.
