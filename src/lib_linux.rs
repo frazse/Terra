@@ -33,8 +33,11 @@ pub fn run() {
         tokio::runtime::Runtime::new()
             .expect("failed to build tokio runtime")
             .block_on(async {
-                // Initialize BLE broker on this runtime (best-effort; non-fatal if unavailable)
-                let ble = match crate::ble::Broker::new(None).await {
+                // Initialize BLE broker on this runtime (best-effort; non-fatal if unavailable).
+                // Hand it the app handle too: addon state (e.g. `btExcludeNames` for the
+                // pre-ride auto-connect supervisor) is looked up through it; every webview
+                // path is a no-op on Linux, so behavior is otherwise unchanged.
+                let ble = match crate::ble::Broker::new(Some(app_handle.clone())).await {
                     Ok(b) => crate::ble::Ble(Some(b)),
                     Err(e) => {
                         eprintln!("[terra] BLE unavailable: {e}");

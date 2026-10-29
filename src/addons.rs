@@ -3,7 +3,7 @@
 //! Addons run with the page's privileges, like userscripts: only install ones you trust.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -521,6 +521,34 @@ pub async fn addon_settings_get(app: AppHandle, store: State<'_, AddonStore>, id
         }
     }
     Ok(SettingsView { values, secrets_set })
+}
+
+/// Platform convention for the BLE supervisor: an enabled addon may declare a text
+/// setting named `btExcludeNames` (device names, comma-separated). While the addon
+/// is enabled, remembered devices with those names must not be pre-connected over
+/// Bluetooth — e.g. the Wi-Fi Trainer Bridge keeps the physical Kickr's Bluetooth
+/// link out of auto-connect while it drives the unit over Wi-Fi, while HR straps
+/// and the like keep their fast pre-connect.
+pub fn bt_exclude_names(app: &AppHandle) -> HashSet<String> {
+    let store: State<'_, AddonStore> = app.state();
+    let mut names = HashSet::new();
+    for a in load_all(app) {
+        if !a.enabled {
+            continue;
+        }
+        let Some(def) = a.settings.iter().find(|d| d.key == "btExcludeNames") else {
+            continue;
+        };
+        if let Some(Value::String(s)) = store.setting_value(&a.id, def) {
+            for n in s.split(',') {
+                let n = n.trim();
+                if !n.is_empty() {
+                    names.insert(n.to_string());
+                }
+            }
+        }
+    }
+    names
 }
 
 /// An empty string or null removes the value (the manifest default applies again).

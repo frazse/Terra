@@ -424,8 +424,16 @@ impl Broker {
                 let known = me.known.lock().await.clone();
                 let mut missing = false;
                 if !known.is_empty() {
+                    // A remembered device an enabled addon keeps off the air (its
+                    // `btExcludeNames` setting) is not pre-connected: e.g. a Kickr
+                    // driven over Wi-Fi must not also be auto-connected over
+                    // Bluetooth.
+                    let excluded = me.app.as_ref().map(crate::addons::bt_exclude_names).unwrap_or_default();
                     let list = me.adapter.peripherals().await.unwrap_or_default();
                     for k in &known {
+                        if k.name.as_deref().map_or(false, |n| excluded.contains(n)) {
+                            continue;
+                        }
                         let Some(p) = list.iter().find(|p| p.id().to_string() == k.id) else {
                             missing = true;
                             continue;
@@ -1234,8 +1242,14 @@ impl Broker {
                 let known = me.known.lock().await.clone();
                 let mut missing = false;
                 if !known.is_empty() {
+                    // A remembered device an enabled addon keeps off the air (its
+                    // `btExcludeNames` setting) is not pre-connected.
+                    let excluded = crate::addons::bt_exclude_names(&me.app);
                     let discovered = me.discovered_devices();
                     for k in &known {
+                        if k.name.as_deref().map_or(false, |n| excluded.contains(n)) {
+                            continue;
+                        }
                         if me.is_connected(&k.id) {
                             continue;
                         }
