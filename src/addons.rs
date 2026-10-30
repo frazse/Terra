@@ -788,6 +788,11 @@ struct TcpConn {
     addon: String,
     peer: String, // resolved "a.b.c.d:port", for diagnostics
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    /// Handle to the reader task. An explicit close must end it too — the read
+    /// half otherwise sits parked in `read()` forever, the socket never fully
+    /// closes, and single-session peers (e.g. the Wi-Fi Kickr) keep their
+    /// session slot latched, refusing every later connect.
+    reader: tokio::task::AbortHandle,
 }
 
 #[derive(Clone)]
@@ -890,27 +895,11 @@ pub async fn addon_tcp_connect(
     let reader_addon = a.id.clone();
     let (reader, writer) = stream.into_split();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-    reg.insert(TcpConn { id: id.clone(), addon: a.id.clone(), peer: peer.clone(), tx }).await;
 
-    // Writer: drains the send queue onto the socket.
-    {
-        let app_w = app.clone();
-        let reg_w = reg0.clone();
-        let id_w = id.clone();
-        tokio::spawn(async move {
-            let mut w = writer;
-            while let Some(bytes) = rx.recv().await {
-                if w.write_all(&bytes).await.is_err() || w.flush().await.is_err() {
-                    if let Some(c) = reg_w.close(&id_w).await {
-                        page_bus(&app_w, &format!("tcp:state:{}", c.addon), &json!({ "conn": id_w, "state": "error", "reason": "write failed" }));
-                    }
-                    break;
-                }
-            }
-        });
-    }
     // Reader: bytes in -> bus events; EOF/error -> `closed` event exactly once.
-    {
+    // Spawned before the insert so the conn can carry the abort handle an
+    // explicit close (see `addon_tcp_close`) needs.
+    let reader_task = {
         let app_r = app.clone();
         let reg_r = reg0.clone();
         let id_r = id.clone();
@@ -932,6 +921,27 @@ pub async fn addon_tcp_connect(
             }
             if let Some(c) = reg_r.close(&id_r).await {
                 page_bus(&app_r, &format!("tcp:state:{}", c.addon), &json!({ "conn": id_r, "state": "closed" }));
+            }
+        })
+    };
+    reg.insert(TcpConn { id: id.clone(), addon: a.id.clone(), peer: peer.clone(), tx, reader: reader_task.abort_handle() }).await;
+
+    // Writer: drains the send queue onto the socket.
+    {
+        let app_w = app.clone();
+        let reg_w = reg0.clone();
+        let id_w = id.clone();
+        tokio::spawn(async move {
+            let mut w = writer;
+            while let Some(bytes) = rx.recv().await {
+                if w.write_all(&bytes).await.is_err() || w.flush().await.is_err() {
+                    if let Some(c) = reg_w.close(&id_w).await {
+                        // The dead socket's read half may still be parked in read() — end it.
+                        c.reader.abort();
+                        page_bus(&app_w, &format!("tcp:state:{}", c.addon), &json!({ "conn": id_w, "state": "error", "reason": "write failed" }));
+                    }
+                    break;
+                }
             }
         });
     }
@@ -971,7 +981,14 @@ pub async fn addon_tcp_list(
     Ok(conns.values().filter(|c| c.addon == addon).map(|c| json!({ "conn": c.id, "peer": c.peer })).collect())
 }
 
-/// Close this addon's connection and flush nothing; the peer sees EOF.
+/// Close this addon's connection. `reg.close` drops the write side (after a
+/// short grace the writer drains and its dropped half sends FIN), then the
+/// reader is aborted so the read half drops too — without that the socket
+/// hangs half-open forever: the reader stays parked in `read()`, the peer's
+/// close never completes, and single-session peers such as the Wi-Fi Kickr
+/// keep their session slot latched, refusing every later connect (os error
+/// 111). Aborting is FIN-safe: the reader continuously drains, so no unread
+/// data means no reset.
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addon_tcp_close(
     app: AppHandle,
@@ -986,6 +1003,12 @@ pub async fn addon_tcp_close(
             reg.insert(c).await;
             return Err("connection belongs to another addon".into());
         }
+        // Grace for the writer to flush its (near-empty) queue and drop the
+        // write half (FIN); LAN drain of a few small frames is <5 ms, so
+        // 250 ms is a 50x margin. Then end the read side so the 4-way close
+        // can complete instead of hanging on our side.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        c.reader.abort();
         page_bus(&app, &format!("tcp:state:{addon}"), &json!({ "conn": conn, "state": "closed" }));
     }
     Ok(())

@@ -515,12 +515,34 @@ impl Broker {
 
     /// Disconnect every paired peripheral and stop all notification tasks.
     /// Called once when the app is shutting down (see `ble_disconnect_all`).
+    ///
+    /// Each device is bounded by a timeout: one hanging disconnect must not
+    /// eat the whole shutdown budget — electron kills the process after its
+    /// 30 s RPC timeout, leaving every not-yet-reached device connected at
+    /// the OS level. A second pass re-checks and disconnects anything still
+    /// up: BlueZ happily keeps bonded devices (e.g. an HR strap) connected
+    /// at the OS level and re-parks a GATT link the moment a client drops it.
+    /// Worst case for 3 devices: 3×4 s + 0.5 s + 3×3 s ≈ 21.5 s < 30 s budget.
     pub async fn disconnect_all(&self) -> Result<(), String> {
         let peripherals = self.peripherals.lock().await.clone();
         for (id, p) in &peripherals {
-            match p.disconnect().await {
-                Ok(()) => println!("[ble] shutdown: disconnected {id}"),
-                Err(e) => eprintln!("[ble] shutdown: disconnect {id} failed: {e}"),
+            match timeout(Duration::from_secs(4), p.disconnect()).await {
+                Ok(Ok(())) => println!("[ble] shutdown: disconnected {id}"),
+                Ok(Err(e)) => eprintln!("[ble] shutdown: disconnect {id} failed: {e}"),
+                Err(_) => eprintln!("[ble] shutdown: disconnect {id} timed out"),
+            }
+        }
+        // Let BlueZ settle, then re-check: anything still up gets one more pass.
+        sleep(Duration::from_millis(500)).await;
+        let peripherals = self.peripherals.lock().await.clone();
+        for (id, p) in &peripherals {
+            if !p.is_connected().await.unwrap_or(false) {
+                continue;
+            }
+            match timeout(Duration::from_secs(3), p.disconnect()).await {
+                Ok(Ok(())) => println!("[ble] shutdown: disconnected (2nd pass) {id}"),
+                Ok(Err(e)) => eprintln!("[ble] shutdown: 2nd pass {id} failed: {e}"),
+                Err(_) => eprintln!("[ble] shutdown: 2nd pass {id} timed out"),
             }
         }
         let mut nt = self.notify_tasks.lock().await;
