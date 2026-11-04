@@ -48,6 +48,9 @@ pub fn run() {
             crate::ride::ride_push,
             crate::ride::ride_latest,
             crate::ride::ride_history,
+            crate::discord::discord_set_activity,
+            crate::discord::discord_clear_activity,
+            crate::discord::discord_status,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -71,6 +74,9 @@ pub fn run() {
 
             // Initialize ride broadcast data (relayed from the page at ~2Hz)
             handle.manage(crate::ride::Ride::new());
+
+            // Discord Rich Presence client (terra.discord)
+            handle.manage(crate::discord::Discord::new());
 
             // Log addon directories and loaded addons
             for dir in crate::addons::addon_dirs(&handle) {

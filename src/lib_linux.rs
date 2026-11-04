@@ -15,6 +15,9 @@ pub fn run() {
     // TCP connection registry (terra.tcp)
     app.manage(crate::addons::TcpRegistry::new());
 
+    // Discord Rich Presence client (terra.discord)
+    app.manage(crate::discord::Discord::new());
+
     // Log addon directories and loaded addons
     for dir in crate::addons::addon_dirs(&app) {
         println!("[terra] addon dir: {}", dir.display());

@@ -28,6 +28,9 @@ fn main() {
                 "addon_storage_remove",
                 "addons_list",
                 "addons_set_enabled",
+                "discord_set_activity",
+                "discord_clear_activity",
+                "discord_status",
             ]),
         ),
     )

@@ -348,6 +348,23 @@ async fn dispatch_rpc_command(
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
 
+        "discord_set_activity" => {
+            let st: State<'_, crate::discord::Discord> = app.state();
+            let activity = args_val.get("activity").cloned().ok_or("missing activity")?;
+            crate::discord::discord_set_activity(app.clone(), st, activity).await
+        }
+
+        "discord_clear_activity" => {
+            let st: State<'_, crate::discord::Discord> = app.state();
+            let cid = args_val.get("clientId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            crate::discord::discord_clear_activity(app.clone(), st, cid).await
+        }
+
+        "discord_status" => {
+            let st: State<'_, crate::discord::Discord> = app.state();
+            Ok(crate::discord::discord_status(app.clone(), st).await)
+        }
+
         _ => Err(format!("Unknown RPC command: {cmd}")),
     }
 }

@@ -1,5 +1,6 @@
 mod addons;
 mod ble;
+mod discord;
 mod ride;
 
 #[cfg(target_os = "linux")]

@@ -111,6 +111,14 @@
         // Up to ~5 min of frames, oldest to newest; `limit` caps the count.
         history: async (limit) => (await core.call('ride_history', { limit: limit == null ? null : limit })) ?? [],
       },
+      // Discord Rich Presence via the Terra core (no sidecar). The core talks to
+      // Discord's local IPC socket directly; we just hand it the activity object
+      // to send (including `clientId`) or a client id to clear.
+      discord: {
+        setActivity: (activity) => core.call('discord_set_activity', { activity }),
+        clear: (clientId) => core.call('discord_clear_activity', { clientId }),
+        status: () => core.call('discord_status', {}),
+      },
       bus: { on, emit: (topic, data) => bus.emit(topic, data) },
       ble: {
         devices: () => [...core.devices.values()].map((d) => ({ id: d.id, name: d.name, connected: d.gatt.connected })),
