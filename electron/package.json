@@ -42,6 +42,7 @@
       "target": [
         "AppImage"
       ],
+      "icon": "../icons/icon.png",
       "category": "Sports"
     }
   },
