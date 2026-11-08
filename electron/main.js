@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, net, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -145,6 +145,134 @@ ipcMain.handle('tauri-invoke', (event, payload) => {
   return sendRpc(cmd, args);
 });
 
+// ---------------------------------------------------------------------------
+// Auto-breakpoint for Biketerra internals.
+//
+// The game keeps its manager (the Tf class) inside a module closure; addons
+// need it on `window`.  Terra reproduces the old manual "conditional
+// breakpoint" trick via the CDP debugger: find the line
+// `this.riderController.handleInput()` inside the (per-deploy hashed) game
+// chunk, and set a breakpoint whose condition is `window.btApp = this, false`.
+// The condition publishes `this` and evaluates to `false`, so the game
+// *never pauses*.
+//
+// Resolves the chunk dynamically on every full page load, so it survives
+// Biketerra's redeploys (new chunk hash, relocated line).
+//
+// Disable with: TERRA_NO_BT_BREAKPOINT=1
+// Note: while Terra's debugger client is attached, the page's own DevTools
+// cannot attach (Chromium allows one debugger client per target).
+// ---------------------------------------------------------------------------
+const BT_APP_MARKER = /this\.riderController\.handleInput\(\s*\)/;
+const btapp = { attached: false, bpId: null, busy: false };
+
+// Returns { url, lineNumber, columnNumber } of the loaded game chunk containing
+// the marker, or null. Both coords are 0-based (CDP convention). The game chunk
+// is minified into very long single lines, so `columnNumber` is essential: a
+// line-only breakpoint lands on the line's FIRST statement (a setup declaration
+// that runs once), never on the per-call marker deep in the line.
+async function btappFindChunk(wc) {
+  let urls = [];
+  try {
+    urls = await wc.executeJavaScript(
+      `Array.from(performance.getEntriesByType('resource'), (e) => e.name)` +
+      `.filter((u) => u.includes('/_app/immutable/chunks/'))`,
+      false
+    );
+  } catch {
+    return null;
+  }
+  for (const u of urls || []) {
+    try {
+      const res = await net.fetch(u, { cache: 'no-cache' });
+      if (!res.ok) continue;
+      const src = await res.text();
+      const m = src.match(BT_APP_MARKER);
+      if (!m) continue;
+      const lineNumber = src.slice(0, m.index).split('\n').length - 1;
+      const lineStart = src.lastIndexOf('\n', m.index - 1) + 1;
+      const columnNumber = m.index - lineStart;
+      return { url: u, lineNumber, columnNumber };
+    } catch {
+      /* chunk unreadable — try the next */
+    }
+  }
+  return null;
+}
+
+// Wait for the condition to fire (next game tick) and confirm `window.btApp`.
+async function btappVerify(wc) {
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    let ok = false;
+    try {
+      ok = await wc.executeJavaScript('!!window.btApp', false);
+    } catch {
+      /* navigation in flight — keep trying */
+    }
+    if (ok) {
+      console.log('[electron] auto-breakpoint OK: game published window.btApp itself');
+      return;
+    }
+  }
+  console.warn('[electron] auto-breakpoint: set, but window.btApp still not seen (game not ticking?)');
+}
+
+async function btappEnsure(wc) {
+  if (process.env.TERRA_NO_BT_BREAKPOINT === '1') return;
+  if (btapp.busy) return;
+  btapp.busy = true;
+  try {
+    if (!btapp.attached) {
+      try {
+        await wc.debugger.attach('1.3');
+      } catch (e) {
+        console.warn('[electron] auto-breakpoint: attach failed (' + (e && e.message) + ') — skipped this load');
+        return;
+      }
+      btapp.attached = true;
+      await wc.debugger.sendCommand('Debugger.enable');
+    }
+
+    // The game chunk may load a few frames after finish-load; retry briefly.
+    let hit = null;
+    for (let i = 0; i < 15 && !hit; i++) {
+      hit = await btappFindChunk(wc);
+      if (!hit) await new Promise((r) => setTimeout(r, 400));
+    }
+    if (!hit) {
+      console.warn('[electron] auto-breakpoint: marker line not found in loaded chunks yet');
+      return;
+    }
+
+    try {
+      if (btapp.bpId) {
+        await wc.debugger.sendCommand('Debugger.removeBreakpoint', { breakpointId: btapp.bpId });
+      }
+    } catch {
+      /* old id already gone */
+    }
+
+    // NOTE: setBreakpointByUrl — NOT setBreakpoint (that one requires a scriptId).
+    // columnNumber is REQUIRED for minified single-line chunks: without it the
+    // breakpoint snaps to the line's first statement and never fires (verified).
+    const set = await wc.debugger.sendCommand('Debugger.setBreakpointByUrl', {
+      url: hit.url,
+      lineNumber: hit.lineNumber,
+      columnNumber: hit.columnNumber,
+      condition: 'window.btApp = this, false',
+    });
+    if (set && set.breakpointId) btapp.bpId = set.breakpointId;
+    console.log('[electron] auto-breakpoint set at ' + hit.url.split('/').pop() +
+      ':' + (hit.lineNumber + 1) + ':' + hit.columnNumber);
+    btappVerify(wc);
+  } catch (e) {
+    console.warn('[electron] auto-breakpoint error:', e && e.message ? e.message : e);
+  } finally {
+    btapp.busy = false;
+  }
+}
+
 function createWindow() {
   Menu.setApplicationMenu(null);
 
@@ -177,6 +305,23 @@ function createWindow() {
   });
 
   mainWindow.loadURL('https://biketerra.com');
+
+  // Auto-breakpoint: expose window.btApp without manual DevTools (see above).
+  mainWindow.webContents.debugger.on('detach', () => {
+    btapp.attached = false;
+    btapp.bpId = null;
+    console.log('[electron] debugger client detached (DevTools opened?). Auto-breakpoint re-arms on next navigation.');
+  });
+  const arm = () => {
+    if (!mainWindow.isDestroyed() && mainWindow.webContents.getURL().includes('biketerra.com')) {
+      btappEnsure(mainWindow.webContents).catch((e) => console.warn('[electron] auto-breakpoint:', e));
+    }
+  };
+  // Full loads AND SPA navigations: the game chunk is lazy, and only loads
+  // once a user enters a ride. An in-flight scan loop re-reads the live chunk
+  // list, so it picks the chunk up whenever it appears.
+  mainWindow.webContents.on('did-finish-load', arm);
+  mainWindow.webContents.on('did-navigate-in-page', arm);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
