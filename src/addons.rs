@@ -48,13 +48,16 @@ pub struct SettingDef {
     pub key: String,
     #[serde(default)]
     pub label: String,
-    /// text | password | number | checkbox
+    /// text | password | number | checkbox | select | color
     #[serde(default = "text_kind", rename = "type")]
     pub kind: String,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub default: Option<Value>,
+    /// Choices for `select` settings (the label and value are the same string).
+    #[serde(default)]
+    pub options: Vec<String>,
 }
 
 fn text_kind() -> String {

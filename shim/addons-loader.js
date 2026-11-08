@@ -74,6 +74,18 @@
         },
         set: (key, value) => core.call('addon_settings_set', { id: meta.id, key, value }),
         onChange: (cb) => on('settings:' + meta.id, cb), // fires when a value is saved in the cog menu
+        // Live preview slot: register `paint(slot)` for a sample rendered in the cog menu's
+        // settings section (only while that addon's settings are expanded). `slot` is a DOM
+        // element to fill; it is emptied before each call. `slot === null` = the preview is
+        // hidden (close the modal or collapse settings): stop any timers or observers then.
+        preview: (paint) => {
+          if (typeof paint !== 'function') return () => {};
+          return on('settings:preview:' + meta.id, (e) => {
+            const slot = e && e.slot ? e.slot : null;
+            if (slot) { try { slot.replaceChildren(); } catch {} }
+            try { paint(slot); } catch (err) { fail(meta.id, err); }
+          });
+        },
         open: () => bus.emit('terra:open-addons', { expand: meta.id }), // open the cog menu on this addon's settings
       },
       // Requests made by Terra itself (no CORS). https only, to hosts listed in the manifest's "connect".

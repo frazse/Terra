@@ -27,7 +27,11 @@
 .terra-input { width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 6px; font: inherit;
   background-color: #2a2a33 !important; color: #eee !important; border: 1px solid #3a3a44 !important; }
 .terra-field input[type=checkbox] { width: auto; }
+.terra-field input[type=color] { width: 110px; height: 32px; padding: 2px; box-sizing: border-box; cursor: pointer; }
 .terra-help { margin-top: 3px; font-size: 11px; color: #777; }
+.terra-preview { margin-bottom: 14px; padding: 12px; min-height: 44px; box-sizing: border-box;
+  background: #1d1d24; border: 1px dashed #3d3d49; border-radius: 8px; overflow: hidden; }
+.terra-preview:empty::after { content: 'no preview (is the addon running?)'; font-size: 11px; color: #666; }
 .terra-status { margin-left: 8px; font-size: 11px; color: #7ddc8a; }
 .terra-info { flex: 1; min-width: 0; }
 .terra-name { font-weight: 600; color: #fff; }
@@ -88,7 +92,14 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
   let overlay = null, body = null, foot = null;
   const dots = new Map(); // addon id -> dot element
   const settingsToggles = new Map(); // addon id -> open/close its settings section
+  const previews = new Map(); // addon id -> live preview slot element (only while its settings are open)
   const paintDots = () => { for (const [id, dot] of dots) dot.classList.toggle('on', addons.active.has(id)); };
+
+  // Ask the addon to (re)paint its live preview into `slot`. `slot === null` hides it.
+  // Emitted after 'settings:<id>' so addons see fresh values first.
+  const firePreview = (id, slot) => core.bus.emit('settings:preview:' + id, { slot: slot || null });
+
+  const colorOf = (v) => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim() : '#000000';
 
   // Settings form for one addon. Password fields are write-only: a saved secret is shown as a placeholder only.
   async function fillSettings(box, a) {
@@ -97,17 +108,36 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     catch (e) { box.textContent = 'Could not load settings: ' + e; return; }
     box.replaceChildren();
     const SAVED = 'saved \u2022\u2022\u2022\u2022\u2022\u2022  (type to replace)';
+    const cur = def => {
+      const v = res.values[def.key];
+      return v === undefined || v === null ? (def.default !== undefined && def.default !== null ? def.default : '') : v;
+    };
+    const slot = addons.active.has(a.id) ? h('div', { class: 'terra-preview' }) : null;
+    if (slot) { box.append(slot); previews.set(a.id, slot); }
     for (const def of a.settings) {
       const secret = def.type === 'password';
       const stored = res.values[def.key];
       const isSet = secret ? res.secretsSet.includes(def.key) : stored !== undefined && stored !== null;
-      const input = h('input', {
-        class: 'terra-input', autocomplete: 'off', spellcheck: 'false',
-        type: def.type === 'number' ? 'number' : secret ? 'password' : def.type === 'checkbox' ? 'checkbox' : 'text',
-      });
-      if (def.type === 'checkbox') input.checked = !!stored;
-      else if (secret) input.placeholder = isSet ? SAVED : 'not set';
-      else input.value = stored === undefined || stored === null ? '' : String(stored);
+      let input;
+      if (def.type === 'select') {
+        input = h('select', { class: 'terra-input' });
+        const opts = def.options || [];
+        for (const o of opts) input.append(h('option', { value: o }, String(o)));
+        const v = cur(def);
+        if (v !== '' && !opts.includes(v)) input.append(h('option', { value: String(v) }, String(v)));
+        if (v !== '') input.value = String(v);
+      } else if (def.type === 'color') {
+        input = h('input', { type: 'color' });
+        input.value = colorOf(cur(def));
+      } else {
+        input = h('input', {
+          class: 'terra-input', autocomplete: 'off', spellcheck: 'false',
+          type: def.type === 'number' ? 'number' : secret ? 'password' : def.type === 'checkbox' ? 'checkbox' : 'text',
+        });
+        if (def.type === 'checkbox') input.checked = !!stored;
+        else if (secret) input.placeholder = isSet ? SAVED : 'not set';
+        else input.value = stored === undefined || stored === null ? '' : String(stored);
+      }
 
       const status = h('span', { class: 'terra-status' });
       const clearBtn = h('button', { class: 'terra-link', type: 'button' }, 'clear saved value');
@@ -122,6 +152,8 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
             clearBtn.style.display = value === '' ? 'none' : '';
           }
           core.bus.emit('settings:' + a.id, { key: def.key }); // running addons can react
+          const p = previews.get(a.id);
+          if (p) firePreview(a.id, p); // keep the live preview in sync
         } catch (e) { status.textContent = 'error: ' + e; }
         setTimeout(() => { status.textContent = ''; }, 2500);
       };
@@ -137,6 +169,11 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
         secret ? clearBtn : '',
         def.description ? h('div', { class: 'terra-help' }, def.description) : ''));
     }
+    if (slot) firePreview(a.id, slot); // the addon paints its live sample
+  }
+
+  function hidePreviews() {
+    for (const [id, p] of previews) { previews.delete(id); firePreview(id, null); }
   }
 
   async function render() {
@@ -145,6 +182,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     catch (e) { body.textContent = 'Could not load addons: ' + e; return; }
     dots.clear();
     settingsToggles.clear();
+    hidePreviews();
     body.replaceChildren();
     if (!res.addons.length) {
       body.append(h('div', { class: 'terra-empty' }, 'No addons found. Put addon folders in:', ...res.dirs.map((d) => h('code', {}, d))));
@@ -173,7 +211,10 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
         const toggle = async (force) => {
           const open = force === undefined ? box.hidden : force;
           if (open) { await fillSettings(box, a); box.hidden = false; toggleBtn.textContent = 'Settings \u25b4'; }
-          else { box.hidden = true; toggleBtn.textContent = 'Settings \u25be'; }
+          else if (!box.hidden) { box.hidden = true; toggleBtn.textContent = 'Settings \u25be';
+            const p = previews.get(a.id);
+            if (p) { previews.delete(a.id); firePreview(a.id, null); }
+          }
         };
         toggleBtn.addEventListener('click', () => toggle());
         settingsToggles.set(a.id, toggle);
@@ -201,6 +242,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     if (!overlay) return;
     overlay.remove();
     overlay = null;
+    hidePreviews();
     removeEventListener('keydown', onKey, true);
   }
   async function openModal(opts) {
@@ -210,7 +252,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     foot = h('div', { class: 'terra-foot' },
       h('div', { class: 'terra-foot-dirs' }),
       h('div', { class: 'terra-foot-bottom' },
-        h('div', { class: 'terra-foot-ver' }, 'Terra 0.6.0'),
+        h('div', { class: 'terra-foot-ver' }, 'Terra 0.7.0'),
         h('button', { class: 'terra-btn', type: 'button', onclick: () => location.reload() }, 'Reload page')
       )
     );
