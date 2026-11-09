@@ -1,7 +1,7 @@
 # Terra addons
 
 An addon is a folder with a `manifest.json`. Terra scans, in order:
-`$TERRA_ADDONS_DIR` (if set), otherwise `~/.local/share/dev.frazse.terra/addons/` and `./addons/`.
+`$TERRA_ADDONS_DIR` (if set), otherwise `~/.local/share/terra/addons/` and `./addons/`.
 Folders starting with `_` or `.` are ignored. The folders are rescanned on every page load,
 so edit an addon and press **F5** (or Ctrl+R) in the Terra window. No rebuild.
 
@@ -11,7 +11,7 @@ Tampermonkey userscripts), including the BLE commands. Only install addons you t
 ## Turning addons on and off
 Click the **cog** next to Biketerra's theme toggle: every addon found in the folders is listed with a switch.
 Changes apply immediately (the addon is started or cleaned up) and are remembered in
-`~/.local/share/dev.frazse.terra/addon-data/.addons-state.json`. The green dot means it is running now.
+`~/.local/share/terra/addon-data/.addons-state.json`. The green dot means it is running now.
 
 ## manifest.json
     {
