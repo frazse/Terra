@@ -112,8 +112,12 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
       const v = res.values[def.key];
       return v === undefined || v === null ? (def.default !== undefined && def.default !== null ? def.default : '') : v;
     };
-    const slot = addons.active.has(a.id) ? h('div', { class: 'terra-preview' }) : null;
-    if (slot) { box.append(slot); previews.set(a.id, slot); }
+    // Always render the slot: when the addon is active its paint fills it, and
+    // when it isn't (opened off a non-matching page) the .terra-preview:empty
+    // placeholder tells the user that. Logging the gate helps debugging.
+    if (!addons.active.has(a.id)) core.log('terra-ui', `preview slot created for ${a.id} but addon not active — will show placeholder`);
+    const slot = h('div', { class: 'terra-preview' });
+    box.append(slot); previews.set(a.id, slot);
     for (const def of a.settings) {
       const secret = def.type === 'password';
       const stored = res.values[def.key];
@@ -169,7 +173,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
         secret ? clearBtn : '',
         def.description ? h('div', { class: 'terra-help' }, def.description) : ''));
     }
-    if (slot) firePreview(a.id, slot); // the addon paints its live sample
+    if (slot) { core.log('terra-ui', `firing preview for ${a.id}`); firePreview(a.id, slot); } // the addon paints its live sample
   }
 
   function hidePreviews() {

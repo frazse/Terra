@@ -83,7 +83,10 @@
           return on('settings:preview:' + meta.id, (e) => {
             const slot = e && e.slot ? e.slot : null;
             if (slot) { try { slot.replaceChildren(); } catch {} }
-            try { paint(slot); } catch (err) { fail(meta.id, err); }
+            try {
+              paint(slot);
+              core.log('addon', `${meta.id} preview painted (slot children: ${slot ? slot.children.length : 0})`);
+            } catch (err) { fail(meta.id, err); }
           });
         },
         open: () => bus.emit('terra:open-addons', { expand: meta.id }), // open the cog menu on this addon's settings
