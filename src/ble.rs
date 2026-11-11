@@ -237,7 +237,26 @@ fn wanted(props: &DiscoveredProps, filters: &[Filter], excl: &[Filter], all: boo
     if all || filters.is_empty() {
         return true;
     }
+    // `wanted` is the LENIENT matcher used by the auto-pair (remembered-device) path only: a
+    // device the user already paired stays offerable even if its advertised services don't
+    // exactly match the current request (e.g. the COROS HR strap) via the "any named device" /
+    // "no services advertised" fallbacks. The user-facing chooser uses the stricter
+    // `chooser_matches` below instead.
     filters.iter().any(|f| f.matches(props)) || props.services.is_empty() || props.name.is_some()
+}
+
+/// Strict, Web-BT-style matcher for the manual chooser: a device only appears if it matches one
+/// of the filters the game requested (or the request admits all). No "any named device"
+/// fallback here — that fallback (in `wanted`) was leaking phones and other non-workout
+/// clutter into the chooser.
+fn chooser_matches(props: &DiscoveredProps, filters: &[Filter], excl: &[Filter], all: bool) -> bool {
+    if excl.iter().any(|f| f.matches(props)) {
+        return false;
+    }
+    if all || filters.is_empty() {
+        return true;
+    }
+    filters.iter().any(|f| f.matches(props))
 }
 
 /// Lower = more important (trainers first, HR last), used to order auto-picks.
@@ -713,7 +732,7 @@ impl Broker {
                 continue;
             }
             let d_props = props_from_peripheral(&p, &props);
-            if !wanted(&d_props, &filters, &excl, all) {
+            if !chooser_matches(&d_props, &filters, &excl, all) {
                 continue;
             }
             let id = p.id().to_string();
@@ -1444,8 +1463,8 @@ impl Broker {
         let disc = self.discovered_devices();
         alog(&format!("candidates: discovered_count={}", disc.len()));
         for props in disc {
-            let w = wanted(&props, &filters, &excl, all);
-            alog(&format!("device id={} name={:?} wanted={}", props.id, props.name, w));
+            let w = chooser_matches(&props, &filters, &excl, all);
+            alog(&format!("device id={} name={:?} chooser_match={}", props.id, props.name, w));
             if !w {
                 continue;
             }
