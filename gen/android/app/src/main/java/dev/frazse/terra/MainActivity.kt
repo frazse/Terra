@@ -91,25 +91,67 @@ class MainActivity : TauriActivity() {
       val addonsDir = File(extDir, "addons")
       if (!addonsDir.exists()) addonsDir.mkdirs()
 
+      // keep in sync with BUNDLED_ADDONS in build-apk.sh
       val bundledAddons = listOf("zwift-ride", "garmin-hud", "fps-monitor")
       for (addonName in bundledAddons) {
         val targetDir = File(addonsDir, addonName)
-        if (!targetDir.exists()) {
-          targetDir.mkdirs()
-          val files = assets.list("addons/$addonName") ?: continue
-          for (f in files) {
-            val inStream = assets.open("addons/$addonName/$f")
-            val outFile = File(targetDir, f)
-            FileOutputStream(outFile).use { outStream ->
+        if (!shouldExtract(addonName, targetDir)) continue
+        if (targetDir.exists()) targetDir.deleteRecursively() // stale copy: replace it
+        targetDir.mkdirs()
+        val files = assets.list("addons/$addonName") ?: continue
+        for (f in files) {
+          assets.open("addons/$addonName/$f").use { inStream ->
+            FileOutputStream(File(targetDir, f)).use { outStream ->
               inStream.copyTo(outStream)
             }
           }
-          android.util.Log.i("Terra", "Successfully extracted bundled $addonName addon")
         }
+        android.util.Log.i(
+          "Terra",
+          "Extracted bundled $addonName addon v${bundledAddonVersion(addonName) ?: "?"}"
+        )
       }
     } catch (e: Exception) {
       android.util.Log.e("Terra", "Error extracting bundled addons", e)
     }
+  }
+
+  /// Re-extract when the on-device copy is missing, has no manifest (incomplete),
+  /// or is OLDER than the version bundled in the APK. A copy that is the same or
+  /// newer (e.g. hand-updated on the device) is left untouched.
+  private fun shouldExtract(addonName: String, targetDir: File): Boolean {
+    if (!targetDir.exists()) return true
+    val assetVersion = bundledAddonVersion(addonName) ?: return false
+    val diskVersion = diskAddonVersion(targetDir) ?: return true
+    return compareVersions(diskVersion, assetVersion) < 0
+  }
+
+  private fun bundledAddonVersion(addonName: String): String? = try {
+    assets.open("addons/$addonName/manifest.json").bufferedReader().use { it.readText() }
+      .let(::versionOf)
+  } catch (e: Exception) {
+    null
+  }
+
+  private fun diskAddonVersion(targetDir: File): String? {
+    val manifest = File(targetDir, "manifest.json")
+    if (!manifest.isFile) return null
+    return runCatching { versionOf(manifest.readText()) }.getOrNull()
+  }
+
+  private fun versionOf(json: String): String? =
+    Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(json)?.groupValues?.get(1)
+
+  /** Numeric-dots comparison: 0.4.0 < 0.4.1 < 0.10.0; ignores suffixes like -beta. */
+  private fun compareVersions(a: String, b: String): Int {
+    fun segments(v: String): List<Int> = v.split(Regex("[^0-9]+")).map { it.toIntOrNull() ?: 0 }
+    val sa = segments(a)
+    val sb = segments(b)
+    for (i in 0 until maxOf(sa.size, sb.size)) {
+      val diff = (sa.getOrElse(i) { 0 }).compareTo(sb.getOrElse(i) { 0 })
+      if (diff != 0) return diff
+    }
+    return 0
   }
 
   fun toggleFullscreen(enable: Boolean? = null) {
