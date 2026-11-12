@@ -40,8 +40,8 @@ function updateStatus() {
 
 // ---- header button: sits in Biketerra's nav row, right after the last link; floats if there is no header ----
 function headerHost() {
-  const link = (t) => [...document.querySelectorAll('a')].find((a) => a.textContent.trim() === t);
-  const first = link('Dashboard'), last = link('Challenges');
+  const link = (t) => [...document.querySelectorAll('.header a, nav a, a')].find((a) => a.textContent.trim() === t);
+  const first = link('Routes') || link('Dashboard'), last = link('Challenges');
   if (!first || !last) return null;
   let box = last.parentElement;
   while (box && !box.contains(first)) box = box.parentElement; // nav list = common ancestor of both links
@@ -67,8 +67,11 @@ function placePill() {
     pill.classList.remove('btz-in-header');
     if (pill.parentElement !== document.body) document.body.append(pill);
     if (pillWrap) pillWrap.remove();
-    // No header on ride pages: the floating pill would sit on top of Biketerra's stats, so hide it there.
-    pill.style.display = mode === 'ride' ? 'none' : '';
+    // No header on ride/spectate pages: the floating pill would sit on top of
+    // Biketerra's stats, so hide it there (the panel stays reachable from any
+    // page that has the nav header, e.g. the dashboard).
+    pill.style.display =
+      mode === 'ride' || location.pathname.startsWith(SPECTATE_PATH_PREFIX) ? 'none' : '';
   }
 }
 
