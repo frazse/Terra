@@ -256,7 +256,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     foot = h('div', { class: 'terra-foot' },
       h('div', { class: 'terra-foot-dirs' }),
       h('div', { class: 'terra-foot-bottom' },
-        h('div', { class: 'terra-foot-ver' }, 'Terra 0.7.0'),
+        h('div', { class: 'terra-foot-ver' }, 'Terra 0.8.0'),
         h('button', { class: 'terra-btn', type: 'button', onclick: () => location.reload() }, 'Reload page')
       )
     );
