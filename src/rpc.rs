@@ -362,7 +362,7 @@ async fn dispatch_rpc_command(
 
         "discord_status" => {
             let st: State<'_, crate::discord::Discord> = app.state();
-            Ok(crate::discord::discord_status(app.clone(), st).await)
+            crate::discord::discord_status(app.clone(), st).await
         }
 
         _ => Err(format!("Unknown RPC command: {cmd}")),

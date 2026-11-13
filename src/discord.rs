@@ -211,9 +211,9 @@ pub async fn discord_clear_activity(
 /// Last known Discord state (who we logged in as, whether we hold a live
 /// connection, and the most recent error).
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
-pub async fn discord_status(app: AppHandle, st: State<'_, Discord>) -> Value {
+pub async fn discord_status(app: AppHandle, st: State<'_, Discord>) -> Result<Value, String> {
     let _ = app;
-    let inner = st.inner();
+    let inner = (&*st).inner();
     let last_user = inner.last_user.lock().unwrap().clone();
     let last_error = inner.last_error.lock().unwrap().clone();
     let ok = *inner.last_ok.lock().unwrap();
@@ -228,7 +228,7 @@ pub async fn discord_status(app: AppHandle, st: State<'_, Discord>) -> Value {
         #[cfg(not(target_os = "linux"))]
         false
     };
-    json!({ "ok": ok, "user": last_user, "connected": connected, "lastError": last_error })
+    Ok(json!({ "ok": ok, "user": last_user, "connected": connected, "lastError": last_error }))
 }
 
 // --------------------------------------------------- protocol (Linux) core
@@ -389,8 +389,12 @@ where
 }
 
 #[cfg(target_os = "linux")]
-/// Candidate Discord IPC socket paths, in try order.
-fn candidate_paths() -> Vec<std::path::PathBuf> {
+/// Base directories where a running Discord may place its IPC socket, in
+/// try order. Native XDG_RUNTIME_DIR/TMPDIR come first (highest priority).
+/// Sandboxed Discord (Flatpak, Snap) keeps its socket in a per-app
+/// subdirectory that is visible from the host's runtime dir while the
+/// sandbox is running, so probing those from the host works fine.
+fn search_roots() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
     let mut bases: Vec<PathBuf> = Vec::new();
     for var in ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"] {
@@ -401,6 +405,38 @@ fn candidate_paths() -> Vec<std::path::PathBuf> {
         }
     }
     bases.push(PathBuf::from("/tmp"));
+
+    if let Some(rd) = std::env::var_os("XDG_RUNTIME_DIR") {
+        // Sandboxed Discord (Flatpak) keeps its socket inside the sandbox's own
+        // runtime dir, which — while the app runs — is visible from the host as
+        // $XDG_RUNTIME_DIR/app/<app-id>/<instance>/discord-ipc-0. The app-id
+        // varies by build (Flathub ships com.discordapp.Discord, other channels
+        // use org.discord.*), so instead of guessing ids we scan every app dir
+        // and each live <instance>/ subdirectory. candidate_paths() only keeps
+        // the ones that actually hold a discord-ipc-* socket, so unrelated
+        // Flatpak apps never produce a candidate.
+        let app_root = PathBuf::from(&rd).join("app");
+        if let Ok(apps) = std::fs::read_dir(&app_root) {
+            for app in apps.flatten() {
+                if app.file_type().ok().is_some_and(|t| t.is_dir()) {
+                    let p = app.path();
+                    // Older flatpak layouts put the socket directly in the app dir.
+                    bases.push(p.clone());
+                    if let Ok(inst) = std::fs::read_dir(&p) {
+                        for i in inst.flatten() {
+                            if i.file_type().ok().is_some_and(|t| t.is_dir()) {
+                                bases.push(i.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Snap Discord keeps its socket in $XDG_RUNTIME_DIR/snap.discord/.
+        bases.push(PathBuf::from(&rd).join("snap.discord"));
+    }
+
+    // ~/.var/app private tmp (a sandbox whose $HOME is mapped into it).
     if let Some(home) = std::env::var_os("HOME") {
         let varapp = PathBuf::from(home).join(".var/app");
         if let Ok(rd) = std::fs::read_dir(&varapp) {
@@ -412,24 +448,26 @@ fn candidate_paths() -> Vec<std::path::PathBuf> {
             }
         }
     }
+
     let mut ordered = Vec::new();
     for b in bases {
         if !ordered.iter().any(|x| x == &b) {
             ordered.push(b);
         }
     }
-    let mut out = Vec::new();
-    for b in ordered {
-        for i in 0..SOCKET_NAMES {
-            out.push(b.join(format!("discord-ipc-{i}")));
-        }
-    }
-    // Only attempt sockets that actually exist on this machine — the other indices
-    // (ipc-1..9) are typically absent (ENOENT) and only add noise. This keeps the
-    // diagnostic to the real candidate(s); if Discord isn't running this comes back
-    // empty and callers report "no Discord IPC socket candidate found".
-    out.retain(|p| p.exists());
-    out
+    ordered
+}
+
+#[cfg(target_os = "linux")]
+/// Candidate Discord IPC socket paths, in try order — only sockets that
+/// actually exist on this machine (the other indices, ipc-1..9, are usually
+/// absent and would only add ENOENT noise to the diagnostics).
+fn candidate_paths() -> Vec<std::path::PathBuf> {
+    search_roots()
+        .into_iter()
+        .flat_map(|b| (0..SOCKET_NAMES).map(move |i| b.join(format!("discord-ipc-{i}"))))
+        .filter(|p| p.exists())
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -666,10 +704,15 @@ pub async fn set_activity(
 async fn establish_and_store(state: &Discord, client_id: &str) -> Result<ConnectionHandle, String> {
     let slot = &state.inner().conn;
     let paths = candidate_paths();
+    let roots_txt = search_roots()
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut attempts: Vec<String> = Vec::with_capacity(paths.len());
 
     let ctx = format!(
-        "env: XDG_RUNTIME_DIR={} HOME={} TMPDIR={} — tried {} socket(s)",
+        "env: XDG_RUNTIME_DIR={} HOME={} TMPDIR={} — probed: {roots_txt} — tried {} socket(s)",
         std::env::var_os("XDG_RUNTIME_DIR").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
         std::env::var_os("HOME").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
         std::env::var_os("TMPDIR").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
@@ -698,7 +741,8 @@ async fn establish_and_store(state: &Discord, client_id: &str) -> Result<Connect
     }
 
     let detail = if attempts.is_empty() {
-        "no Discord IPC socket candidate found".to_string()
+        "no Discord IPC socket candidate found (is Discord running? a Flatpak Discord's socket appears under $XDG_RUNTIME_DIR/app/<app-id>/<instance>/, e.g. app/com.discordapp.Discord/…; the list above is every directory probed)"
+            .to_string()
     } else {
         attempts.join("; ")
     };
