@@ -25,7 +25,7 @@ cd "$SCRIPT_DIR"
 
 # Keep in sync with `bundledAddons` in
 # gen/android/app/src/main/java/dev/frazse/terra/MainActivity.kt
-BUNDLED_ADDONS=("zwift-ride" "garmin-hud" "fps-monitor")
+BUNDLED_ADDONS=("zwift-ride" "garmin-hud" "fps-monitor" "wifi-trainer-bridge")
 ASSETS_DIR="gen/android/app/src/main/assets/addons"
 LIVE_DIR="${TERRA_ADDON_LIVE_DIR:-$HOME/.local/share/terra/addons}"
 
@@ -99,6 +99,18 @@ sync_assets() {
     ver=$(grep -o '"version"[^,}]*' "$ASSETS_DIR/$id/manifest.json" 2>/dev/null | head -1 || true)
     echo "    $id ${ver:- (no manifest version)}"
   done
+
+  # Android policy: wifi-trainer-bridge ships bundled but disabled by default
+  # (keep addons/ submodule untouched, where desktop keeps it enabled).
+  if [ -f "$ASSETS_DIR/wifi-trainer-bridge/manifest.json" ]; then
+    node -e '
+      const fs = require("fs");
+      const p = process.argv[1];
+      const m = JSON.parse(fs.readFileSync(p, "utf8"));
+      m.enabled = false;
+      fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+    ' "$ASSETS_DIR/wifi-trainer-bridge/manifest.json"
+  fi
 
   # Hard guarantee: every bundled addon ships a manifest inside the APK.
   for id in "${BUNDLED_ADDONS[@]}"; do
