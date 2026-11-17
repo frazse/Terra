@@ -268,8 +268,21 @@
       const owner = options.__terraOwner ?? null; // set by terra.ble.request(): addon-owned pairing
       const silent = silentNext;
       silentNext = false;
+      let reqFilters = filters;
+      if (silent) {
+        // auto-trainer (or a future equivalent) decides bike vs row and publishes
+        // window.__terraMode + window.__terraPrefer = { bike: <namePrefix>, row: <namePrefix> }
+        // so the remembered-device path picks the trainer matching the session. No addon
+        // publishing = no extra filter = the historical best-ranked-remembered behavior.
+        const mode = window.__terraMode || 'bike';
+        const pref = window.__terraPrefer && window.__terraPrefer[mode];
+        if (pref && !filters.some((f) => f.namePrefix === pref)) {
+          reqFilters = filters.concat([{ namePrefix: pref }]);
+          log('silent auto-pair prefers mode', { mode, namePrefix: pref });
+        }
+      }
       let info;
-      try { info = await call('ble_request_device', { filters, exclusionFilters, acceptAll, silent, owner }); }
+      try { info = await call('ble_request_device', { filters: reqFilters, exclusionFilters, acceptAll, silent, owner }); }
       catch (e) { window.__terraSettled?.(false); throw notFound(e); }
       if (silent) { // auto-pair: never hand the same device to the page twice
         if (autoPaired.has(info.id)) { window.__terraSettled?.(false); throw notFound('already paired by auto-pair'); }
@@ -332,6 +345,17 @@
       if (running || !enabled()) return;
       running = true;
       try {
+        // Give auto-trainer a bounded moment to decide bike vs row (it publishes
+        // window.__terraModeReady; worst case is its ~3 s "is the Ride controller
+        // stowed?" probe — a bike ride resolves as soon as the controller links).
+        // Absent = no addon, press as before.
+        if (window.__terraModeReady) {
+          const how = await Promise.race([
+            Promise.resolve(window.__terraModeReady).then(() => 'ready').catch(() => 'error'),
+            sleep(12000).then(() => 'timeout'),
+          ]);
+          log('auto-pair waited for mode', { how, mode: window.__terraMode || null });
+        }
         for (let i = 0; i < 6; i++) {
           const b = findBtn();
           if (!b) break;
