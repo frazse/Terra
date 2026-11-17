@@ -186,6 +186,21 @@ allows one debugger client per target). `nameplates`-style addons poll
 `id`. When you change a bundled addon and it "doesn't take effect", delete or fix the
 live copy (or set `TERRA_ADDONS_DIR`) first.
 
+> ⚠️ **Dev-only sandbox addons — keep them local, and *don't* commit.** Some addons exist
+> *only* in the live folder `~/.local/share/terra/addons/` as working experiments and are
+> **intentionally not part of the `addons/` submodule or Terra**. Known examples:
+> - `scene-probe` — read-only probes of the engine's render-pool / misc-pool API.
+> - `bike-preview` — injects the game's bike GLTF geometry into the misc pool.
+> - `nameplates3d` — per-rider nameplates as real 3D textured quads in the engine render queue (the textured path behind `route-sign`; the live reference for ADDONS.md §C, incl. its texture readback / probe tooling).
+> - `sbs3d` — side-by-side stereo 3D for Viture XR glasses (single-window double-render of ONE game instance + composite; dual-Eye HUD mirror + stereo input bridge).
+> - `dss-probe` — one-shot diagnostic: dumps the game's live data + relevant DOM to `~/Downloads/Terra/dss-probe.json`.
+>
+> These are **not** shippable. They must **not** be added to the `addons/` submodule,
+> referenced from anything in the Terra repo, or bundled — treat them like the throwaway
+> `/tmp` harnesses in §7 (the same "keep it out of the repo" rule), except they live in the
+> live addon dir *by design*. When in doubt, an addon that isn't in the `addons/` submodule
+> and isn't named above here / in §10 stays in the live folder only.
+
 ---
 
 ## 7. Running, building, testing
@@ -225,9 +240,19 @@ does the same on an ARM64 runner and uploads the AppImage.
 ### Android APK
 ```bash
 rustup target add aarch64-linux-android
-cargo tauri android build --apk -t aarch64
+./build-apk.sh               # sync bundled addons → cargo tauri android build --apk -t aarch64
 # → gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
 ```
+**Bundled addons (zwift-ride, garmin-hud, fps-monitor):** the APK ships frozen copies in
+`gen/android/app/src/main/assets/addons/`, and `build-apk.sh` re-syncs them **before**
+every build. Sources: latest Terra-Addons `main` from GitHub (default), `--live`
+(your `~/.local/share/terra/addons`, for unpushed local work), or `--pinned` (the
+submodule as checked out, offline). `--sync-only` just refreshes the assets so you can
+inspect the diff. The list lives in **two places — keep them in sync**: `BUNDLED_ADDONS`
+in `build-apk.sh` and `bundledAddons` in
+`gen/android/app/src/main/java/dev/frazse/terra/MainActivity.kt`, whose
+`extractBundledAddons()` re-extracts a bundled addon onto the phone **only when the APK
+ships a newer manifest version** than the on-device copy (same-or-newer copies are kept).
 
 ### `karoo-apk/` (a *separate* Kotlin app)
 Not part of the app build. A Hammerhead-Karoo companion (Karoo extension, `karoo-ext`
