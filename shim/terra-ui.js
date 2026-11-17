@@ -1,4 +1,4 @@
-// Terra's own UI: a cog next to Biketerra's theme toggle that opens the addons modal.
+// Terra's own UI: a cog in Biketerra's header (next to "Help"; old builds: next to the theme toggle) that opens the addons modal.
 // Built in (not an addon) so you can always get back to it, even with every addon off.
 (() => {
   if (window.top !== window || window.__terraUi) return;
@@ -56,6 +56,10 @@
 .terra-foot-ver { color: #aaa; font-weight: 600; font-size: 12px; }
 .terra-btn { flex: none; background: #2a2a33; color: #eee; border: 0; border-radius: 6px; padding: 7px 14px; font: inherit; cursor: pointer; }
 .terra-btn:hover { background: #363642; }
+.terra-cog { display: inline-flex; align-items: center; padding: 0 6px; margin: 0 2px; cursor: pointer; }
+/* .nav-profile/.header prefix (specificity 0,2,0) so the page's own button rules can't re-apply a background */
+.nav-profile .terra-cog, header .terra-cog { background: transparent; border: 0; color: inherit; }
+.terra-cog:hover { opacity: .75; }
 canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="profile"] {
   will-change: transform;
   transform: translateZ(0);
@@ -256,7 +260,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     foot = h('div', { class: 'terra-foot' },
       h('div', { class: 'terra-foot-dirs' }),
       h('div', { class: 'terra-foot-bottom' },
-        h('div', { class: 'terra-foot-ver' }, 'Terra 0.8.0'),
+        h('div', { class: 'terra-foot-ver' }, 'Terra 0.8.1'),
         h('button', { class: 'terra-btn', type: 'button', onclick: () => location.reload() }, 'Reload page')
       )
     );
@@ -272,24 +276,32 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     if (opts && opts.expand) settingsToggles.get(opts.expand)?.(true); // e.g. an addon asking for its settings
   }
 
-  /* ---------- cog next to the theme toggle ---------- */
+  /* ---------- cog next to the header's "Help" link (old builds: next to the theme toggle) ---------- */
   const GEAR = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
     '<circle cx="12" cy="12" r="3"></circle>' +
     '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
   let cog = null;
   function placeCog() {
-    const theme = document.querySelector('.nav-profile .theme-toggle') || document.querySelector('.theme-toggle');
-    if (!theme) return; // no header on this page (e.g. rides)
+    // Redesigned header: the theme toggle is gone, so anchor next to the "Help" link in .nav-profile.
+    const help = document.querySelector('.nav-profile a[href="/help-center"]') ||
+      Array.from(document.querySelectorAll('.nav-profile a')).find((a) => a.textContent.trim().toLowerCase() === 'help');
+    const anchor = help ||
+      document.querySelector('.nav-profile .theme-toggle') || // older builds
+      document.querySelector('.theme-toggle');
+    if (!anchor) return; // no header on this page (e.g. rides)
     if (!cog) {
       cog = h('button', { type: 'button', 'aria-label': 'Terra addons', title: 'Terra addons' });
       cog.innerHTML = GEAR;
       cog.addEventListener('click', () => openModal());
     }
-    const cls = theme.className + ' terra-cog'; // same classes as the theme toggle = same look and hover
-    if (cog.className !== cls) cog.className = cls;
-    if (theme.nextElementSibling !== cog) theme.after(cog);
+    // Style the cog explicitly (see .terra-cog in the CSS block): do NOT copy the anchor's
+    // classes — the Svelte scope hash on them also matches the component's own button rules
+    // (the account trigger's border/background), which gave the gear a stray box.
+    if (cog.className !== 'terra-cog') cog.className = 'terra-cog';
+    if (anchor.nextElementSibling !== cog) anchor.after(cog);
   }
   core.bus.on('terra:open-addons', (e) => openModal(e)); // addons can open their settings (terra.settings.open)
   setInterval(placeCog, 500); // the page re-renders its header now and then
+  ensureCss(); // the cog needs its own styling from first paint (previously only attached when opening the modal)
   placeCog();
 })();
