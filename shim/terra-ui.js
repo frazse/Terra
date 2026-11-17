@@ -8,7 +8,7 @@
 
   const CSS = `
 .terra-overlay { position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,.55); backdrop-filter: blur(2px); font: 14px system-ui, sans-serif; }
+  background: rgba(0,0,0,.65); font: 14px system-ui, sans-serif; }
 .terra-modal { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px); display: flex; flex-direction: column;
   background: #15151a; color: #eee; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.6); overflow: hidden; }
 .terra-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #25252d; }
@@ -60,6 +60,22 @@
 /* .nav-profile/.header prefix (specificity 0,2,0) so the page's own button rules can't re-apply a background */
 .nav-profile .terra-cog, header .terra-cog { background: transparent; border: 0; color: inherit; }
 .terra-cog:hover { opacity: .75; }
+.terra-datadir { padding: 12px 20px; border-top: 1px solid #25252d; font-size: 12px; color: #888; }
+.terra-datadir .terra-dd-path { font-family: monospace; font-size: 11px; color: #aaa; word-break: break-all; margin: 4px 0; }
+.terra-datadir .terra-dd-hint { color: #e6a23c; margin-bottom: 6px; }
+.terra-datadir .terra-dd-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.terra-dd-restart { color: #7ddc8a; margin-top: 6px; font-size: 12px; }
+.terra-dd-error { color: #f87171; margin-top: 6px; font-size: 12px; }
+.terra-btn-primary { flex: none; background: #ff6b57; color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+.terra-btn-primary:hover { background: #ff5740; }
+.terra-btn[disabled], .terra-btn-primary[disabled] { opacity: .6; cursor: default; }
+.terra-setup-body { padding: 16px 20px; color: #ccc; line-height: 1.5; }
+.terra-setup-body p { margin: 0 0 10px; }
+.terra-setup-body .terra-dd-path { font-family: monospace; font-size: 11px; color: #aaa; word-break: break-all; margin: 8px 0; }
+.terra-setup-body .terra-dd-hint { color: #e6a23c; font-size: 12px; margin: 8px 0; }
+.terra-setup-foot { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; padding: 12px 20px 16px; border-top: 1px solid #25252d; }
+.terra-btn-danger { background: #3a1a1a; border: 1px solid #6b2020; color: #e06060; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+.terra-btn-danger:hover { background: #4a2020; }
 canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="profile"] {
   will-change: transform;
   transform: translateZ(0);
@@ -257,10 +273,15 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     if (overlay) { if (opts && opts.expand) settingsToggles.get(opts.expand)?.(true); return; }
     ensureCss();
     body = h('div', { class: 'terra-body' }, 'Loading\u2026');
+
+    // Data folder section (Android: picker + reset; other platforms: info + reset)
+    const ddSection = h('div', { class: 'terra-datadir' },
+      h('strong', {}, 'Data folder'));
     foot = h('div', { class: 'terra-foot' },
+      ddSection,
       h('div', { class: 'terra-foot-dirs' }),
       h('div', { class: 'terra-foot-bottom' },
-        h('div', { class: 'terra-foot-ver' }, 'Terra 0.8.2'),
+        h('div', { class: 'terra-foot-ver' }, 'Terra 0.9.0'),
         h('button', { class: 'terra-btn', type: 'button', onclick: () => location.reload() }, 'Reload page')
       )
     );
@@ -272,6 +293,68 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
     addEventListener('keydown', onKey, true);
     document.body.append(overlay);
+
+    // Populate the data folder section asynchronously
+    (async () => {
+      try {
+        const st = await core.call('terra_data_dir_status', {});
+        const pathEl = h('div', { class: 'terra-dd-path' }, st.path || 'unknown');
+        const statusMsg = h('div', {});
+        ddSection.append(pathEl);
+        if (st.isDefault && navigator.userAgent.includes('Android')) {
+          ddSection.append(h('div', { class: 'terra-dd-hint' },
+            'This is a hidden Android folder. Choose a visible folder so your file manager can see it.'));
+        }
+        ddSection.append(statusMsg);
+        const actions = h('div', { class: 'terra-dd-actions' });
+        if (navigator.userAgent.includes('Android')) {
+          const pickBtn = h('button', { class: 'terra-btn', type: 'button' }, 'Choose folder\u2026');
+          pickBtn.addEventListener('click', async () => {
+            pickBtn.disabled = true;
+            pickBtn.textContent = 'Waiting for picker\u2026';
+            statusMsg.className = '';
+            statusMsg.textContent = '';
+            try {
+              const res = await core.call('terra_pick_data_dir', {});
+              if (res.status === 'success') {
+                pathEl.textContent = res.path;
+                ddSection.querySelector('.terra-dd-hint')?.remove();
+                statusMsg.className = 'terra-dd-restart';
+                statusMsg.textContent = 'Folder saved. Please close and reopen Terra for the new folder to take effect.';
+                core.log('terra-ui', 'data dir changed to: ' + res.path);
+              } else if (res.status !== 'cancelled') {
+                statusMsg.className = 'terra-dd-error';
+                statusMsg.textContent = res.message || ('Picker ' + res.status);
+                core.log('terra-ui', 'data dir picker: ' + (res.message || res.status));
+              }
+            } catch (e) {
+              statusMsg.className = 'terra-dd-error';
+              statusMsg.textContent = 'Error: ' + e;
+              core.log('terra-ui', 'data dir picker error: ' + e);
+            }
+            pickBtn.disabled = false;
+            pickBtn.textContent = 'Choose folder\u2026';
+          });
+          actions.append(pickBtn);
+        }
+        const resetBtn = h('button', { class: 'terra-btn-danger', type: 'button' }, 'Reset all data');
+        resetBtn.addEventListener('click', async () => {
+          if (!confirm('This will DELETE all Terra addons, addon settings, and remembered Bluetooth devices.\n\nThis cannot be undone. Continue?')) return;
+          if (!confirm('Are you absolutely sure? Everything will be wiped: addons/, addon-data/, devices.json.')) return;
+          try {
+            const res = await core.call('terra_reset_all_data', {});
+            core.log('terra-ui', 'reset all data: ' + JSON.stringify(res));
+            alert('Terra data reset. Remove ' + (res.removed || []).join(', ') + ' from ' + res.path + '.\n\nReload the page to apply.');
+          } catch (e) { alert('Reset failed: ' + e); }
+        });
+        actions.append(resetBtn);
+        ddSection.append(actions);
+      } catch (e) {
+        // Command not available (e.g. older build) — show a minimal hint
+        ddSection.append(h('div', { class: 'terra-dd-path' }, 'data folder feature unavailable'));
+      }
+    })();
+
     await render();
     if (opts && opts.expand) settingsToggles.get(opts.expand)?.(true); // e.g. an addon asking for its settings
   }
@@ -300,8 +383,95 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="
     if (cog.className !== 'terra-cog') cog.className = 'terra-cog';
     if (anchor.nextElementSibling !== cog) anchor.after(cog);
   }
+  let setupChecked = false;
+  async function maybePromptDataDir() {
+    if (setupChecked || !navigator.userAgent.includes('Android') || !document.body) return;
+    setupChecked = true;
+    try {
+      const st = await core.call('terra_data_dir_status', {});
+      if (!st || !st.isDefault || st.prompted || overlay) return;
+      ensureCss();
+
+      const msgEl = h('div', {});
+      const permNote = st.hasStoragePermission === false
+        ? h('p', { class: 'terra-dd-hint' },
+            'Android will first ask you to allow "All files access" for Terra so it can read and write your chosen folder.')
+        : null;
+
+      const bodyEl = h('div', { class: 'terra-setup-body' },
+        h('p', {}, 'Choose a visible folder on your device where Terra will store its addons, addon data, and remembered Bluetooth devices (devices.json).'),
+        h('div', { class: 'terra-dd-path' }, 'Current default: ' + (st.path || 'Android/data')),
+        ...(permNote ? [permNote] : []),
+        msgEl
+      );
+
+      let setupOverlay = null;
+      const closeSetup = () => { if (setupOverlay) { setupOverlay.remove(); setupOverlay = null; } };
+
+      const pickBtn = h('button', { class: 'terra-btn-primary', type: 'button' }, 'Choose folder\u2026');
+      const skipBtn = h('button', { class: 'terra-btn', type: 'button' }, 'Use default folder');
+      const footEl = h('div', { class: 'terra-setup-foot' }, skipBtn, pickBtn);
+
+      pickBtn.addEventListener('click', async () => {
+        pickBtn.disabled = true;
+        skipBtn.disabled = true;
+        pickBtn.textContent = 'Waiting for picker\u2026';
+        msgEl.className = '';
+        msgEl.textContent = '';
+        try {
+          const res = await core.call('terra_pick_data_dir', {});
+          if (res.status === 'success') {
+            msgEl.className = 'terra-dd-restart';
+            msgEl.textContent = 'Folder set to ' + res.path + '. Please close and reopen Terra for the new folder to take effect.';
+            footEl.replaceChildren(
+              h('button', { class: 'terra-btn-primary', type: 'button', onclick: closeSetup }, 'OK')
+            );
+            return;
+          }
+          if (res.status !== 'cancelled') {
+            msgEl.className = 'terra-dd-error';
+            msgEl.textContent = res.message || ('Picker ' + res.status);
+          }
+        } catch (e) {
+          msgEl.className = 'terra-dd-error';
+          msgEl.textContent = 'Error: ' + e;
+        }
+        pickBtn.disabled = false;
+        skipBtn.disabled = false;
+        pickBtn.textContent = 'Choose folder\u2026';
+      });
+
+      skipBtn.addEventListener('click', async () => {
+        skipBtn.disabled = true;
+        pickBtn.disabled = true;
+        try {
+          await core.call('terra_dismiss_data_dir_prompt', {});
+        } catch (e) {
+          core.log('terra-ui', 'dismiss prompt error: ' + e);
+        }
+        closeSetup();
+      });
+
+      setupOverlay = h('div', { class: 'terra-overlay' },
+        h('div', { class: 'terra-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Terra data folder' },
+          h('div', { class: 'terra-head' }, h('h3', {}, 'Terra data folder')),
+          bodyEl,
+          footEl
+        )
+      );
+      document.body.append(setupOverlay);
+    } catch (e) {
+      core.log('terra-ui', 'data dir prompt check failed: ' + e);
+    }
+  }
+
   core.bus.on('terra:open-addons', (e) => openModal(e)); // addons can open their settings (terra.settings.open)
   setInterval(placeCog, 500); // the page re-renders its header now and then
   ensureCss(); // the cog needs its own styling from first paint (previously only attached when opening the modal)
   placeCog();
+  if (document.body) {
+    maybePromptDataDir();
+  } else {
+    document.addEventListener('DOMContentLoaded', maybePromptDataDir, { once: true });
+  }
 })();

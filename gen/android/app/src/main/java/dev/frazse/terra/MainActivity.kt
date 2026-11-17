@@ -1,9 +1,14 @@
 package dev.frazse.terra
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.DocumentsContract
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -11,6 +16,9 @@ import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.Keep
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -18,26 +26,93 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 
 class MainActivity : TauriActivity() {
   companion object {
     private var instance: MainActivity? = null
+    private var dataDirResult: String = "pending" // "pending" | "cancelled" | "success:<path>" | "error:<msg>"
 
+    @Keep
     @JvmStatic
     fun setFullscreenJni(enable: Boolean) {
       instance?.runOnUiThread {
         instance?.toggleFullscreen(enable)
       }
     }
+
+    @Keep
+    @JvmStatic
+    fun startDataDirPicker() {
+      dataDirResult = "pending"
+      instance?.runOnUiThread {
+        val act = instance ?: return@runOnUiThread
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+          try {
+            val intent = Intent(
+              Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+              Uri.parse("package:${act.packageName}")
+            )
+            act.storagePermLauncher?.launch(intent)
+          } catch (_: Exception) {
+            try {
+              val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+              act.storagePermLauncher?.launch(intent)
+            } catch (e: Exception) {
+              dataDirResult = "error:Could not open storage permission settings: ${e.message}"
+            }
+          }
+        } else {
+          act.dataDirLauncher?.launch(null)
+        }
+      }
+    }
+
+    @Keep
+    @JvmStatic
+    fun getDataDirPickResult(): String {
+      return dataDirResult
+    }
+
+    @Keep
+    @JvmStatic
+    fun resetDataDirPickResult() {
+      dataDirResult = "pending"
+    }
+
+    @Keep
+    @JvmStatic
+    fun hasAllFilesAccess(): Boolean {
+      return Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+    }
+
+    @Keep
+    @JvmStatic
+    fun getInternalFilesDir(): String {
+      return instance?.filesDir?.absolutePath ?: ""
+    }
   }
 
   private var isFullscreen = true
+  private var dataDirLauncher: ActivityResultLauncher<Uri?>? = null
+  private var storagePermLauncher: ActivityResultLauncher<Intent>? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     instance = this
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+
+    dataDirLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+      handleDataDirPicked(uri)
+    }
+    storagePermLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+        dataDirResult = "error:All files access permission is required to store Terra data in a custom folder."
+      } else {
+        dataDirLauncher?.launch(null)
+      }
+    }
 
     val cookieManager = CookieManager.getInstance()
     cookieManager.setAcceptCookie(true)
@@ -87,8 +162,8 @@ class MainActivity : TauriActivity() {
 
   private fun extractBundledAddons() {
     try {
-      val extDir = getExternalFilesDir(null) ?: return
-      val addonsDir = File(extDir, "addons")
+      val dataDir = getTerraDataDir()
+      val addonsDir = File(dataDir, "addons")
       if (!addonsDir.exists()) addonsDir.mkdirs()
 
       // keep in sync with BUNDLED_ADDONS in build-apk.sh
@@ -152,6 +227,130 @@ class MainActivity : TauriActivity() {
       if (diff != 0) return diff
     }
     return 0
+  }
+
+  // ─── Data directory picker ───────────────────────────────────────────────────
+
+  /// Resolve the effective data directory: user-picked (pointer file) or default Android/data.
+  private fun getTerraDataDir(): File {
+    val pointer = File(filesDir, "terra-data-dir.txt")
+    if (pointer.exists()) {
+      val path = runCatching { pointer.readText().trim() }.getOrNull()
+      if (!path.isNullOrEmpty()) {
+        val f = File(path)
+        if (f.exists() || f.mkdirs()) return f
+      }
+    }
+    return getExternalFilesDir(null) ?: filesDir
+  }
+
+  private fun handleDataDirPicked(uri: Uri?) {
+    if (uri == null) {
+      dataDirResult = "cancelled"
+      return
+    }
+    try {
+      contentResolver.takePersistableUriPermission(
+        uri,
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+      )
+    } catch (e: Exception) {
+      dataDirResult = "error:failed to get persistent access: ${e.message}"
+      return
+    }
+
+    val path = uriToPath(uri)
+    if (path == null) {
+      dataDirResult = "error:could not resolve a filesystem path (pick a folder on main storage)"
+      return
+    }
+
+    // Probe: verify the path is actually writable
+    try {
+      val dir = File(path)
+      dir.mkdirs()
+      val marker = File(dir, ".terra-probe")
+      marker.writeText("ok")
+      if (marker.readText() != "ok") throw Exception("read-back mismatch")
+      marker.delete()
+    } catch (e: Exception) {
+      dataDirResult = "error:folder not writable: ${e.message}"
+      return
+    }
+
+    // Migrate existing state from the old (default) location
+    try {
+      migrateData(File(path))
+    } catch (e: Exception) {
+      dataDirResult = "error:migration failed: ${e.message}"
+      return
+    }
+
+    // Persist the pointer and mark first-launch prompt as completed
+    try {
+      File(filesDir, "terra-data-dir.txt").writeText(path)
+      File(filesDir, "terra-datadir-prompted.txt").writeText("1")
+    } catch (e: Exception) {
+      dataDirResult = "error:failed to save preference: ${e.message}"
+      return
+    }
+
+    android.util.Log.i("Terra", "Data dir set to: $path")
+    dataDirResult = "success:$path"
+  }
+
+  /// Map a content:// tree URI to a real /storage/… path. Returns null for unresolvable URIs.
+  private fun uriToPath(uri: Uri): String? {
+    // content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FTerra
+    //   → /storage/emulated/0/Documents/Terra
+    val docId = try {
+      DocumentsContract.getTreeDocumentId(uri) ?: return null
+    } catch (_: Exception) { return null }
+
+    // docId looks like "primary:Documents/Terra" or "primary%3ADocuments%2FTerra"
+    val decoded = Uri.decode(docId)
+    val colonIdx = decoded.indexOf(':')
+    if (colonIdx <= 0) return null
+    val volume = decoded.substring(0, colonIdx)
+    if (volume != "primary") return null // only main storage supported
+    val subPath = decoded.substring(colonIdx + 1)
+    return if (subPath.isEmpty()) "/storage/emulated/0" else "/storage/emulated/0/$subPath"
+  }
+
+  /// Copy existing addons/, addon-data/, devices.json from the old default dir to [newDir].
+  /// Only copies files that don't already exist in [newDir] (non-destructive).
+  private fun migrateData(newDir: File) {
+    val oldDir = getTerraDataDir()
+    if (oldDir == newDir) return
+    if (!oldDir.exists()) return
+
+    // Copy entire subdirectories
+    for (sub in listOf("addons", "addon-data")) {
+      val src = File(oldDir, sub)
+      if (!src.exists()) continue
+      val dst = File(newDir, sub)
+      if (!dst.exists()) dst.mkdirs()
+      copyDirTree(src, dst)
+    }
+
+    // Copy devices.json
+    val devSrc = File(oldDir, "devices.json")
+    if (devSrc.exists()) {
+      val devDst = File(newDir, "devices.json")
+      if (!devDst.exists()) devSrc.copyTo(devDst)
+    }
+  }
+
+  private fun copyDirTree(src: File, dst: File) {
+    if (src.isDirectory) {
+      if (!dst.exists()) dst.mkdirs()
+      src.listFiles()?.forEach { child -> copyDirTree(child, File(dst, child.name)) }
+    } else if (src.isFile) {
+      if (!dst.exists()) {
+        dst.parentFile?.mkdirs()
+        src.copyTo(dst)
+      }
+    }
   }
 
   fun toggleFullscreen(enable: Boolean? = null) {

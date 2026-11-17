@@ -90,6 +90,10 @@ function startRustProcess() {
   rustProcess.on('exit', (code, signal) => {
     console.error(`[electron] Rust process exited with code ${code}, signal ${signal}. Restarting...`);
     rustProcess = null;
+    for (const [id, entry] of pendingRpc) {
+      pendingRpc.delete(id);
+      entry.reject(new Error(`Rust backend exited (code ${code}, signal ${signal})`));
+    }
     setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         startRustProcess();
@@ -106,14 +110,14 @@ function startRustProcess() {
 // or with { __error: message } if the backend reports an error.
 function sendRpc(cmd, args) {
   if (!rustProcess || !rustProcess.stdin.writable) {
-    return Promise.reject(new Error('Rust backend process not running'));
+    return Promise.resolve({ __error: 'Rust backend process not running' });
   }
   const id = reqId++;
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const timer = setTimeout(() => {
       if (pendingRpc.has(id)) {
         pendingRpc.delete(id);
-        reject(new Error(`RPC timeout for command: ${cmd}`));
+        resolve({ __error: `RPC timeout for command: ${cmd}` });
       }
     }, 30000);
 

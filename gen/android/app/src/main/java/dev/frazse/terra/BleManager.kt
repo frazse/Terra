@@ -261,6 +261,7 @@ object BleManager {
       val latch = CountDownLatch(1)
       var servicesJson = ""
       var connectError: String? = null
+      var attemptGatt: BluetoothGatt? = null
 
       val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -275,9 +276,11 @@ object BleManager {
             }, 200)
           } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
             Log.i(TAG, "GATT disconnected or failed for $address (status=$status, newState=$newState)")
-            connectedGatts.remove(address)
+            val removed = connectedGatts.remove(address, gatt)
             try { gatt.close() } catch (_: Exception) {}
-            try { notifyDisconnectedJni(address) } catch (_: Exception) {}
+            if (removed) {
+              try { notifyDisconnectedJni(address) } catch (_: Exception) {}
+            }
             if (latch.count > 0) {
               connectError = "Connection failed with status $status"
               latch.countDown()
@@ -286,6 +289,11 @@ object BleManager {
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+          if (latch.count == 0L) {
+            // Connection attempt already timed out; close this late GATT instance.
+            try { gatt.disconnect(); gatt.close() } catch (_: Exception) {}
+            return
+          }
           if (status == BluetoothGatt.GATT_SUCCESS) {
             connectedGatts[address] = gatt
             servicesJson = buildServicesJson(gatt)
@@ -297,8 +305,7 @@ object BleManager {
         }
 
         override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-          val uuidKey = characteristic.uuid.toString().lowercase()
-          val req = pendingReads.remove(uuidKey)
+          val req = pendingReads.remove(opKey(address, characteristic.uuid))
           if (req != null) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
               val bytes = characteristic.value ?: byteArrayOf()
@@ -312,8 +319,7 @@ object BleManager {
 
         @Suppress("DEPRECATION")
         override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-          val uuidKey = characteristic.uuid.toString().lowercase()
-          val req = pendingReads.remove(uuidKey)
+          val req = pendingReads.remove(opKey(address, characteristic.uuid))
           if (req != null) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
               req.resultB64 = Base64.encodeToString(value, Base64.NO_WRAP)
@@ -326,8 +332,7 @@ object BleManager {
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
           Log.i(TAG, "onCharacteristicWrite char=${characteristic.uuid} status=$status")
-          val uuidKey = characteristic.uuid.toString().lowercase()
-          val req = pendingWrites.remove(uuidKey)
+          val req = pendingWrites.remove(opKey(address, characteristic.uuid))
           if (req != null) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
               req.error = "Write failed with status $status"
@@ -339,8 +344,7 @@ object BleManager {
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
           Log.i(TAG, "onDescriptorWrite desc=${descriptor.uuid} status=$status")
-          val uuidKey = "desc_${descriptor.characteristic.uuid}".lowercase()
-          val req = pendingWrites.remove(uuidKey)
+          val req = pendingWrites.remove("desc_${opKey(address, descriptor.characteristic.uuid)}")
           if (req != null) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
               req.error = "Descriptor write failed with status $status"
@@ -366,12 +370,17 @@ object BleManager {
       }
 
       mainHandler.post {
-        device.connectGatt(ctx, false, callback, BluetoothDevice.TRANSPORT_LE)
+        attemptGatt = device.connectGatt(ctx, false, callback, BluetoothDevice.TRANSPORT_LE)
       }
 
       val ok = latch.await(12, TimeUnit.SECONDS)
       if (ok && connectError == null && servicesJson.isNotEmpty()) {
         return servicesJson
+      }
+      attemptGatt?.let { g ->
+        if (connectedGatts[address] !== g) {
+          try { g.disconnect(); g.close() } catch (_: Exception) {}
+        }
       }
       lastError = connectError ?: if (!ok) "Connection timed out" else "No services found"
       Log.w(TAG, "Attempt $attempt failed: $lastError")
@@ -417,6 +426,9 @@ object BleManager {
     }
   }
 
+  private fun opKey(address: String, uuid: UUID): String =
+    "${address.lowercase()}:${uuid.toString().lowercase()}"
+
   private fun parseUuid(str: String): UUID {
     val s = str.trim()
     return if (s.length == 4) {
@@ -436,20 +448,20 @@ object BleManager {
     val service = gatt.getService(serviceUuid) ?: return "Error: Service $serviceUuidStr not found"
     val charac = service.getCharacteristic(charUuid) ?: return "Error: Characteristic $charUuidStr not found"
 
-    val uuidKey = charUuid.toString().lowercase()
+    val reqKey = opKey(address, charUuid)
     val req = ReadRequest(CountDownLatch(1))
-    pendingReads[uuidKey] = req
+    pendingReads[reqKey] = req
 
     mainHandler.post {
       if (!gatt.readCharacteristic(charac)) {
-        pendingReads.remove(uuidKey)
+        pendingReads.remove(reqKey)
         req.error = "readCharacteristic returned false"
         req.latch.countDown()
       }
     }
 
     val ok = req.latch.await(5, TimeUnit.SECONDS)
-    pendingReads.remove(uuidKey)
+    pendingReads.remove(reqKey)
     if (!ok) return "Error: Read timed out"
     if (req.error != null) return "Error: ${req.error}"
     return req.resultB64
@@ -464,7 +476,7 @@ object BleManager {
     val charac = service.getCharacteristic(charUuid) ?: return "Error: Characteristic $charUuidStr not found"
 
     val bytes = Base64.decode(b64Value, Base64.NO_WRAP)
-    val uuidKey = charUuid.toString().lowercase()
+    val reqKey = opKey(address, charUuid)
 
     if (!withResponse) {
       enqueueGattWrite(Runnable {
@@ -487,7 +499,7 @@ object BleManager {
     }
 
     val req = WriteRequest(CountDownLatch(1))
-    pendingWrites[uuidKey] = req
+    pendingWrites[reqKey] = req
 
     enqueueGattWrite(Runnable {
       val okInitiated = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -501,7 +513,7 @@ object BleManager {
       }
 
       if (!okInitiated) {
-        pendingWrites.remove(uuidKey)
+        pendingWrites.remove(reqKey)
         req.error = "writeCharacteristic returned false"
         req.latch.countDown()
         onGattWriteCompleted()
@@ -509,7 +521,7 @@ object BleManager {
     })
 
     val ok = req.latch.await(5, TimeUnit.SECONDS)
-    pendingWrites.remove(uuidKey)
+    pendingWrites.remove(reqKey)
     if (!ok) return "Error: Write timed out"
     if (req.error != null) return "Error: ${req.error}"
     return "OK"
@@ -536,7 +548,7 @@ object BleManager {
       BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
     }
 
-    val descKey = "desc_${charUuid}".lowercase()
+    val descKey = "desc_${opKey(address, charUuid)}"
     val req = WriteRequest(CountDownLatch(1))
     pendingWrites[descKey] = req
 
@@ -587,12 +599,25 @@ object BleManager {
       for (service in gatt.services) {
         for (charac in service.characteristics) {
           if ((charac.properties and (BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_INDICATE)) != 0) {
-            gatt.setCharacteristicNotification(charac, false)
-            val descriptor = charac.getDescriptor(CCCD_UUID)
-            if (descriptor != null) {
-              descriptor.value = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
-              gatt.writeDescriptor(descriptor)
-            }
+            mainHandler.post { gatt.setCharacteristicNotification(charac, false) }
+            val descriptor = charac.getDescriptor(CCCD_UUID) ?: continue
+            val valBytes = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+            enqueueGattWrite(Runnable {
+              var started = false
+              try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                  started = gatt.writeDescriptor(descriptor, valBytes) == BluetoothStatusCodes.SUCCESS
+                } else {
+                  descriptor.value = valBytes
+                  @Suppress("DEPRECATION")
+                  started = gatt.writeDescriptor(descriptor)
+                }
+              } catch (e: Exception) {
+                Log.e(TAG, "Error unsubscribing ${charac.uuid} for $address", e)
+              } finally {
+                if (!started) onGattWriteCompleted()
+              }
+            })
           }
         }
       }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ride-history"
+description = "Enables the ride_history command without any pre-configured scope."
+commands.allow = ["ride_history"]
+
+[[permission]]
+identifier = "deny-ride-history"
+description = "Denies the ride_history command without any pre-configured scope."
+commands.deny = ["ride_history"]

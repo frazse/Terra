@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ble-disconnect-all"
+description = "Enables the ble_disconnect_all command without any pre-configured scope."
+commands.allow = ["ble_disconnect_all"]
+
+[[permission]]
+identifier = "deny-ble-disconnect-all"
+description = "Denies the ble_disconnect_all command without any pre-configured scope."
+commands.deny = ["ble_disconnect_all"]

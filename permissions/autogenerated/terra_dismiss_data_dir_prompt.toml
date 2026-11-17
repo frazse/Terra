@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-dismiss-data-dir-prompt"
+description = "Enables the terra_dismiss_data_dir_prompt command without any pre-configured scope."
+commands.allow = ["terra_dismiss_data_dir_prompt"]
+
+[[permission]]
+identifier = "deny-terra-dismiss-data-dir-prompt"
+description = "Denies the terra_dismiss_data_dir_prompt command without any pre-configured scope."
+commands.deny = ["terra_dismiss_data_dir_prompt"]

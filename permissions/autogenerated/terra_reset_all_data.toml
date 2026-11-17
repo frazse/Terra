@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-reset-all-data"
+description = "Enables the terra_reset_all_data command without any pre-configured scope."
+commands.allow = ["terra_reset_all_data"]
+
+[[permission]]
+identifier = "deny-terra-reset-all-data"
+description = "Denies the terra_reset_all_data command without any pre-configured scope."
+commands.deny = ["terra_reset_all_data"]

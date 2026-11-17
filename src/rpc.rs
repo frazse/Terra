@@ -29,13 +29,13 @@ pub async fn run_rpc_server(app_handle: AppHandle) {
 
         while let Ok(bytes) = reader.read_line(&mut buffer) {
             if bytes == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                buffer.clear();
-                continue;
+                break;
             }
             let line = buffer.trim().to_string();
             if !line.is_empty() {
-                let _ = tx.blocking_send(line);
+                if tx.blocking_send(line).is_err() {
+                    break;
+                }
             }
             buffer.clear();
         }
@@ -62,6 +62,13 @@ pub async fn run_rpc_server(app_handle: AppHandle) {
                     let _ = out.flush();
                 }
             });
+        }
+    }
+
+    println!("[rpc] stdin closed, shutting down");
+    if let Some(ble) = app_handle.try_state::<crate::ble::Ble>() {
+        if let Ok(b) = crate::ble::broker(&ble) {
+            let _ = b.disconnect_all().await;
         }
     }
 }
@@ -363,6 +370,22 @@ async fn dispatch_rpc_command(
         "discord_status" => {
             let st: State<'_, crate::discord::Discord> = app.state();
             crate::discord::discord_status(app.clone(), st).await
+        }
+
+        "terra_data_dir_status" => {
+            crate::android_data_dir::terra_data_dir_status(app.clone())
+        }
+
+        "terra_dismiss_data_dir_prompt" => {
+            crate::android_data_dir::terra_dismiss_data_dir_prompt(app.clone())
+        }
+
+        "terra_reset_all_data" => {
+            crate::android_data_dir::terra_reset_all_data(app.clone())
+        }
+
+        "terra_pick_data_dir" => {
+            Err("Data folder selection is only available on Android.".to_string())
         }
 
         _ => Err(format!("Unknown RPC command: {cmd}")),

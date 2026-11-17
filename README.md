@@ -42,7 +42,7 @@
 * **Cargo Tauri CLI** (`cargo install tauri-cli --version "^2.0"`) — Android only
 * **Android SDK & NDK** — Android only
 
-> Linux desktop also needs the usual Chromium/Electron build deps (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libappindicator3-dev`, `librsvg2-dev`, `libssl-dev`, `libdbus-1-dev`, `libudev-dev`, `fuse3`, `pkg-config`).
+> Linux desktop also needs the usual Chromium/Electron build deps (`libgtk-3-dev`, `libappindicator3-dev`, `librsvg2-dev`, `libssl-dev`, `libdbus-1-dev`, `libudev-dev`, `fuse3`, `pkg-config`).
 
 ---
 
@@ -81,7 +81,7 @@ npm run dist
 
 The AppImage is generated at:
 ```text
-electron/dist/Terra-0.8.2.AppImage
+electron/dist/Terra-0.9.0.AppImage
 ```
 
 (Or just run `./build.sh`, which syncs the version everywhere, builds Rust, and packages it.)

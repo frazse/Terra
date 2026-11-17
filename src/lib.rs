@@ -2,6 +2,7 @@ mod addons;
 mod ble;
 mod discord;
 mod ride;
+pub mod android_data_dir;
 
 #[cfg(target_os = "linux")]
 mod linux_runtime;

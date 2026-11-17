@@ -73,3 +73,36 @@ pub fn ride_latest(state: State<'_, Ride>) -> Option<Value> {
 pub fn ride_history(state: State<'_, Ride>, limit: Option<usize>) -> Vec<Value> {
     state.history(limit)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ride_ring_buffer_keeps_latest_and_caps_history() {
+        let r = Ride::new();
+        assert!(r.latest().is_none());
+        assert!(r.history(None).is_empty());
+
+        for i in 0..(MAX_HISTORY + 25) {
+            r.push(json!({ "seq": i }));
+        }
+
+        assert_eq!(r.latest(), Some(json!({ "seq": MAX_HISTORY + 24 })));
+        let all = r.history(None);
+        assert_eq!(all.len(), MAX_HISTORY);
+        assert_eq!(all.first(), Some(&json!({ "seq": 25 })));
+        assert_eq!(all.last(), Some(&json!({ "seq": MAX_HISTORY + 24 })));
+
+        let last_3 = r.history(Some(3));
+        assert_eq!(
+            last_3,
+            vec![
+                json!({ "seq": MAX_HISTORY + 22 }),
+                json!({ "seq": MAX_HISTORY + 23 }),
+                json!({ "seq": MAX_HISTORY + 24 }),
+            ]
+        );
+    }
+}

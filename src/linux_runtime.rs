@@ -196,6 +196,7 @@ pub mod async_runtime {
     pub use tokio::task::spawn;
     pub use tokio::task::JoinHandle;
 
+    #[allow(dead_code)]
     pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ride-latest"
+description = "Enables the ride_latest command without any pre-configured scope."
+commands.allow = ["ride_latest"]
+
+[[permission]]
+identifier = "deny-ride-latest"
+description = "Denies the ride_latest command without any pre-configured scope."
+commands.deny = ["ride_latest"]

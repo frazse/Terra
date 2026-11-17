@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-pick-data-dir"
+description = "Enables the terra_pick_data_dir command without any pre-configured scope."
+commands.allow = ["terra_pick_data_dir"]
+
+[[permission]]
+identifier = "deny-terra-pick-data-dir"
+description = "Denies the terra_pick_data_dir command without any pre-configured scope."
+commands.deny = ["terra_pick_data_dir"]

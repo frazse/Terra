@@ -45,11 +45,16 @@ use tauri::{AppHandle, State};
 #[cfg(target_os = "linux")]
 use crate::linux_runtime::{AppHandle, State};
 
+#[cfg(target_os = "linux")]
 const OP_HANDSHAKE: u32 = 0;
+#[cfg(target_os = "linux")]
 const OP_FRAME: u32 = 1;
+#[cfg(target_os = "linux")]
 const OP_PING: u32 = 3;
+#[cfg(target_os = "linux")]
 const OP_PONG: u32 = 4;
 
+#[cfg(target_os = "linux")]
 const SOCKET_NAMES: u32 = 10; // discord-ipc-0 .. discord-ipc-9
 
 /// One held-open IPC connection to Discord, shared by all pushes.
@@ -140,6 +145,7 @@ impl Discord {
         &self.inner
     }
 
+    #[cfg(target_os = "linux")]
     fn note(&self, user: Option<String>, ok: bool, err: Option<String>) {
         let inner = self.inner();
         if let Some(u) = user {
@@ -175,7 +181,7 @@ pub async fn discord_set_activity(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (st, activity);
+        let _ = (st, cid, activity);
         return Err(
             "Discord Rich Presence isn't available on this platform yet (Linux only)".into(),
         );
@@ -565,6 +571,7 @@ async fn establish_connection(
     Err(format!("{base} (retried {HANDSHAKE_ATTEMPTS}x)"))
 }
 
+#[cfg(target_os = "linux")]
 type Pending =
     std::collections::HashMap<String, tokio::sync::oneshot::Sender<Result<Value, String>>>;
 
@@ -750,4 +757,43 @@ async fn establish_and_store(state: &Discord, client_id: &str) -> Result<Connect
     eprintln!("[discord] FAIL: {msg}");
     state.note(None, false, Some(msg.clone()));
     Err(msg)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_truncates_filters_buttons_and_locks_start() {
+        LOCKED_START_SEC.store(0, Ordering::SeqCst);
+
+        let long_details = "x".repeat(200);
+        let out = sanitize(&json!({
+            "details": long_details,
+            "state": "Climbing",
+            "start": 1_700_000_000_000u64,
+            "largeImage": "logo",
+            "buttons": [
+                { "label": "Valid", "url": "https://biketerra.com" },
+                { "label": "Insecure", "url": "http://example.com" },
+                { "label": "Valid 2", "url": "https://github.com/frazse/Terra" },
+                { "label": "Extra", "url": "https://example.org" }
+            ]
+        }));
+
+        assert_eq!(out["details"].as_str().unwrap().len(), 128);
+        assert_eq!(out["state"], "Climbing");
+        assert_eq!(out["timestamps"]["start"], 1_700_000_000);
+        assert_eq!(out["assets"]["large_image"], "logo");
+
+        let btns = out["buttons"].as_array().unwrap();
+        assert_eq!(btns.len(), 2);
+        assert_eq!(btns[0]["label"], "Valid");
+        assert_eq!(btns[1]["label"], "Valid 2");
+
+        // Second call with a different start keeps the locked timestamp until cleared.
+        let out2 = sanitize(&json!({ "start": 1_800_000_000u64 }));
+        assert_eq!(out2["timestamps"]["start"], 1_700_000_000);
+        LOCKED_START_SEC.store(0, Ordering::SeqCst);
+    }
 }

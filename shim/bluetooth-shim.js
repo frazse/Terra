@@ -399,7 +399,7 @@
     if (chooserOverlay) return;
     const CSS = `
 .terra-chooser-overlay { position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,.65); backdrop-filter: blur(4px); font: 14px system-ui, sans-serif; }
+  background: rgba(0,0,0,.72); font: 14px system-ui, sans-serif; }
 .terra-chooser-modal { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 64px); display: flex; flex-direction: column;
   background: #18181f; color: #eee; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.7); overflow: hidden; border: 1px solid #2d2d38; }
 .terra-chooser-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #2a2a35; }

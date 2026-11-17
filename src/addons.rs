@@ -180,6 +180,15 @@ pub fn addon_dirs(app: &AppHandle) -> Vec<PathBuf> {
 }
 
 pub fn load_all(app: &AppHandle) -> Vec<Addon> {
+    load_all_inner(app, true)
+}
+
+/// Metadata-only scan (skips reading `.js`/`.css` files) for runtime checks and settings.
+fn load_manifests(app: &AppHandle) -> Vec<Addon> {
+    load_all_inner(app, false)
+}
+
+fn load_all_inner(app: &AppHandle, load_code: bool) -> Vec<Addon> {
     let mut out: Vec<Addon> = vec![];
     for dir in addon_dirs(app) {
         let Ok(rd) = fs::read_dir(&dir) else { continue };
@@ -191,7 +200,7 @@ pub fn load_all(app: &AppHandle) -> Vec<Addon> {
             if !path.is_dir() || folder.starts_with('_') || folder.starts_with('.') {
                 continue;
             }
-            match load_one(&path, &folder) {
+            match load_one(&path, &folder, load_code) {
                 Ok(Some(a)) => {
                     if out.iter().any(|x| x.id == a.id) {
                         eprintln!("[terra] addon '{}': duplicate id, skipped ({})", a.id, path.display());
@@ -228,15 +237,18 @@ fn read_files(dir: &Path, files: &[String]) -> Result<Vec<String>, String> {
     .collect()
 }
 
-fn load_one(path: &Path, folder: &str) -> Result<Option<Addon>, String> {
+fn load_one(path: &Path, folder: &str, load_code: bool) -> Result<Option<Addon>, String> {
     let raw = fs::read_to_string(path.join("manifest.json")).map_err(|e| format!("manifest.json: {e}"))?;
     let m: Manifest = serde_json::from_str(&raw).map_err(|e| format!("manifest.json: {e}"))?;
     let id = m.id.unwrap_or_else(|| folder.to_string());
     if !valid_id(&id) {
         return Err(format!("invalid id '{id}'"));
     }
-    let js = read_files(path, &m.js)?.join("\n;\n");
-    let css = read_files(path, &m.css)?;
+    let (js, css) = if load_code {
+        (read_files(path, &m.js)?.join("\n;\n"), read_files(path, &m.css)?)
+    } else {
+        (String::new(), Vec::new())
+    };
     let settings: Vec<SettingDef> = m.settings.into_iter().filter(|d| valid_id(&d.key)).collect();
     Ok(Some(Addon {
         name: m.name.unwrap_or_else(|| id.clone()),
@@ -292,11 +304,21 @@ pub async fn addons_activate(app: AppHandle, url: String, active: Vec<String>) -
             }
         }
     }
-    for id in active {
-        if !addons.iter().any(|a| a.id == id && a.enabled && a.hits(&url)) {
-            res.stop.push(id);
+    for id in &active {
+        if !addons.iter().any(|a| a.id == *id && a.enabled && a.hits(&url)) {
+            res.stop.push(id.clone());
         }
     }
+
+    // Reclaim stale TCP sockets left behind by a hard reload (active == []) or stopped addons.
+    if let Some(reg) = app.try_state::<TcpRegistry>() {
+        if active.is_empty() {
+            reg.close_all().await;
+        } else if !res.stop.is_empty() {
+            reg.close_for_addons(&res.stop).await;
+        }
+    }
+
     res
 }
 
@@ -474,7 +496,7 @@ pub async fn addons_list(app: AppHandle) -> AddonList {
     AddonList {
         version: app.package_info().version.to_string(),
         dirs: addon_dirs(&app).iter().map(|d| d.display().to_string()).collect(),
-        addons: load_all(&app)
+        addons: load_manifests(&app)
         .into_iter()
         .map(|a| AddonInfo {
             id: a.id,
@@ -509,7 +531,7 @@ pub struct SettingsView {
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addon_settings_get(app: AppHandle, store: State<'_, AddonStore>, id: String) -> Result<SettingsView, String> {
-    let addons = load_all(&app);
+    let addons = load_manifests(&app);
     let a = addons.iter().find(|a| a.id == id).ok_or("unknown addon")?;
     let mut values = Map::new();
     let mut secrets_set = vec![];
@@ -535,7 +557,7 @@ pub async fn addon_settings_get(app: AppHandle, store: State<'_, AddonStore>, id
 pub fn bt_exclude_names(app: &AppHandle) -> HashSet<String> {
     let store: State<'_, AddonStore> = app.state();
     let mut names = HashSet::new();
-    for a in load_all(app) {
+    for a in load_manifests(app) {
         if !a.enabled {
             continue;
         }
@@ -563,7 +585,7 @@ pub async fn addon_settings_set(
     key: String,
     value: Value,
 ) -> Result<(), String> {
-    let addons = load_all(&app);
+    let addons = load_manifests(&app);
     let a = addons.iter().find(|a| a.id == id).ok_or("unknown addon")?;
     let d = a
     .settings
@@ -642,11 +664,24 @@ pub struct HttpResp {
     body: String,
 }
 
+fn http_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> = std::sync::OnceLock::new();
+    match CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none()) // a redirect could leave the allowed hosts
+            .build()
+            .map_err(err)
+    }) {
+        Ok(c) => Ok(c),
+        Err(e) => Err(e.clone()),
+    }
+}
+
 /// https only, and only to hosts in the addon's manifest `connect` list. `{{setting:KEY}}` placeholders in the
 /// url, header values, body, basic auth and form fields are filled in here from the addon's settings.
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: String, req: HttpReq) -> Result<HttpResp, String> {
-    let addons = load_all(&app);
+    let addons = load_manifests(&app);
     let a = addons
     .iter()
     .find(|a| a.id == addon && a.enabled)
@@ -663,12 +698,10 @@ pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: Str
     }
 
     let method = reqwest::Method::from_bytes(req.method.as_deref().unwrap_or("GET").to_uppercase().as_bytes()).map_err(err)?;
-    let client = reqwest::Client::builder()
-    .timeout(Duration::from_millis(req.timeout_ms.unwrap_or(60_000)))
-    .redirect(reqwest::redirect::Policy::none()) // a redirect could leave the allowed hosts
-    .build()
-    .map_err(err)?;
-    let mut rb = client.request(method, url);
+    let client = http_client()?;
+    let mut rb = client
+        .request(method, url)
+        .timeout(Duration::from_millis(req.timeout_ms.unwrap_or(60_000)));
     for (k, v) in &req.headers {
         rb = rb.header(k.as_str(), ex(v)?);
     }
@@ -709,7 +742,7 @@ pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: Str
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
 pub async fn addon_save_file(app: AppHandle, addon: String, filename: String, base64: String) -> Result<String, String> {
-    if !load_all(&app).iter().any(|a| a.id == addon && a.enabled) {
+    if !load_manifests(&app).iter().any(|a| a.id == addon && a.enabled) {
         return Err("unknown or disabled addon".into());
     }
     let clean: String = filename
@@ -746,6 +779,18 @@ pub async fn addon_save_file(app: AppHandle, addon: String, filename: String, ba
 
 // ---------- terra.udp: fire-and-forget UDP datagram (e.g. a bike computer on the local Wi-Fi) ----------
 
+async fn udp_socket(ipv4: bool) -> Result<&'static tokio::net::UdpSocket, String> {
+    static V4: tokio::sync::OnceCell<tokio::net::UdpSocket> = tokio::sync::OnceCell::const_new();
+    static V6: tokio::sync::OnceCell<tokio::net::UdpSocket> = tokio::sync::OnceCell::const_new();
+    if ipv4 {
+        V4.get_or_try_init(|| async { tokio::net::UdpSocket::bind("0.0.0.0:0").await.map_err(err) })
+            .await
+    } else {
+        V6.get_or_try_init(|| async { tokio::net::UdpSocket::bind("[::]:0").await.map_err(err) })
+            .await
+    }
+}
+
 /// Send a single UDP datagram to `host:port` (or `hostname:port`). `{{setting:KEY}}` placeholders in
 /// `target` are expanded from the addon's settings. Resolves to the number of bytes sent.
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
@@ -759,7 +804,7 @@ pub async fn addon_udp_send(
     if payload.len() > 65_507 {
         return Err("payload exceeds the UDP datagram limit (65507 bytes)".into());
     }
-    let addons = load_all(&app);
+    let addons = load_manifests(&app);
     let a = addons
         .iter()
         .find(|a| a.id == addon && a.enabled)
@@ -773,7 +818,7 @@ pub async fn addon_udp_send(
             it.next().ok_or_else(|| format!("could not resolve target '{expanded}'"))?
         }
     };
-    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.map_err(err)?;
+    let socket = udp_socket(addr.is_ipv4()).await?;
     let sent = socket.send_to(payload.as_bytes(), addr).await.map_err(err)?;
     Ok(sent as u32)
 }
@@ -824,6 +869,32 @@ impl TcpRegistry {
     async fn close(&self, id: &str) -> Option<TcpConn> {
         self.0.conns.lock().await.remove(id)
     }
+    async fn close_all(&self) {
+        let drained: Vec<TcpConn> = self.0.conns.lock().await.drain().map(|(_, c)| c).collect();
+        for c in drained {
+            Self::teardown_conn(c);
+        }
+    }
+    async fn close_for_addons(&self, addons: &[String]) {
+        let mut g = self.0.conns.lock().await;
+        let ids: Vec<String> = g
+            .iter()
+            .filter(|(_, c)| addons.contains(&c.addon))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for id in ids {
+            if let Some(c) = g.remove(&id) {
+                Self::teardown_conn(c);
+            }
+        }
+    }
+    fn teardown_conn(c: TcpConn) {
+        tokio::spawn(async move {
+            drop(c.tx);
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            c.reader.abort();
+        });
+    }
 }
 
 /// Run a snippet in the page: the webview on non-Linux platforms, a stdout `js_eval`
@@ -852,7 +923,7 @@ fn page_bus(app: &AppHandle, topic: &str, payload: &Value) {
 
 /// The addon must exist and be enabled (same gate as the other terra.* network RPCs).
 fn require_addon(app: &AppHandle, addon: &str, enabled_only: bool) -> Result<(), String> {
-    let ok = load_all(app).iter().any(|a| a.id == addon && (!enabled_only || a.enabled));
+    let ok = load_manifests(app).iter().any(|a| a.id == addon && (!enabled_only || a.enabled));
     if ok { Ok(()) } else { Err("unknown or disabled addon".into()) }
 }
 
@@ -869,7 +940,7 @@ pub async fn addon_tcp_connect(
     port: u16,
     timeout_ms: u32,
 ) -> Result<String, String> {
-    let addons = load_all(&app);
+    let addons = load_manifests(&app);
     let a = addons.iter().find(|a| a.id == addon && a.enabled).ok_or("unknown or disabled addon")?;
     let host = store.expand(&addon, &a.settings, &host)?;
 
@@ -1015,4 +1086,91 @@ pub async fn addon_tcp_close(
         page_bus(&app, &format!("tcp:state:{addon}"), &json!({ "conn": conn, "state": "closed" }));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_store(name: &str) -> (PathBuf, AddonStore) {
+        let dir = std::env::temp_dir().join(format!("terra-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = AddonStore::new(dir.clone());
+        (dir, store)
+    }
+
+    #[test]
+    fn glob_matching() {
+        assert!(glob("https://biketerra.com/*", "https://biketerra.com/ride/123"));
+        assert!(glob("*://biketerra.com/ride*", "https://biketerra.com/ride"));
+        assert!(!glob("https://biketerra.com/ride*", "https://biketerra.com/routes"));
+        assert!(glob("*", "anything"));
+        assert!(glob("", ""));
+        assert!(!glob("", "a"));
+    }
+
+    #[test]
+    fn host_matching() {
+        assert!(host_matches("api.example.com", "API.EXAMPLE.COM"));
+        assert!(!host_matches("example.com", "sub.example.com"));
+        assert!(host_matches("*.example.com", "sub.example.com"));
+        assert!(host_matches("*.example.com", "a.b.example.com"));
+        assert!(!host_matches("*.example.com", "example.com"));
+        assert!(!host_matches("*.example.com", "badexample.com"));
+    }
+
+    #[test]
+    fn id_and_path_validation() {
+        assert!(valid_id("garmin-hud"));
+        assert!(valid_id("addon_1.0"));
+        assert!(!valid_id(""));
+        assert!(!valid_id(".hidden"));
+        assert!(!valid_id("../escape"));
+        assert!(!valid_id("a/b"));
+        assert!(!valid_id(&"a".repeat(65)));
+
+        assert!(safe_rel("main.js"));
+        assert!(safe_rel("sub/style.css"));
+        assert!(!safe_rel("../secret.js"));
+        assert!(!safe_rel("/etc/passwd"));
+    }
+
+    #[test]
+    fn expand_settings_with_defaults_and_secrets() {
+        let (dir, store) = temp_store("expand");
+        let defs = vec![
+            SettingDef {
+                key: "host".into(),
+                label: "Host".into(),
+                kind: "text".into(),
+                description: String::new(),
+                default: Some(json!("api.example.com")),
+                options: vec![],
+            },
+            SettingDef {
+                key: "apiKey".into(),
+                label: "API Key".into(),
+                kind: "password".into(),
+                description: String::new(),
+                default: None,
+                options: vec![],
+            },
+        ];
+
+        store
+            .settings_access("test-addon", true, |m| {
+                m.insert("apiKey".into(), json!("secret-123"));
+            })
+            .unwrap();
+
+        let expanded = store
+            .expand("test-addon", &defs, "https://{{setting:host}}/v1?k={{setting:apiKey}}")
+            .unwrap();
+        assert_eq!(expanded, "https://api.example.com/v1?k=secret-123");
+
+        assert!(store.expand("test-addon", &defs, "{{setting:unknown}}").is_err());
+        assert!(store.expand("test-addon", &defs, "{{setting:host").is_err());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

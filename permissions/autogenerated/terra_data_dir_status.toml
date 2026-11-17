@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-data-dir-status"
+description = "Enables the terra_data_dir_status command without any pre-configured scope."
+commands.allow = ["terra_data_dir_status"]
+
+[[permission]]
+identifier = "deny-terra-data-dir-status"
+description = "Denies the terra_data_dir_status command without any pre-configured scope."
+commands.deny = ["terra_data_dir_status"]

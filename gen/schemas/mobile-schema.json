@@ -219,6 +219,36 @@
           "markdownDescription": "Enables the addon_storage_set command without any pre-configured scope."
         },
         {
+          "description": "Enables the addon_tcp_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addon-tcp-close",
+          "markdownDescription": "Enables the addon_tcp_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the addon_tcp_connect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addon-tcp-connect",
+          "markdownDescription": "Enables the addon_tcp_connect command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the addon_tcp_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addon-tcp-list",
+          "markdownDescription": "Enables the addon_tcp_list command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the addon_tcp_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addon-tcp-send",
+          "markdownDescription": "Enables the addon_tcp_send command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the addon_udp_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addon-udp-send",
+          "markdownDescription": "Enables the addon_udp_send command without any pre-configured scope."
+        },
+        {
           "description": "Enables the addons_activate command without any pre-configured scope.",
           "type": "string",
           "const": "allow-addons-activate",
@@ -247,6 +277,12 @@
           "type": "string",
           "const": "allow-ble-disconnect",
           "markdownDescription": "Enables the ble_disconnect command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ble_disconnect_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ble-disconnect-all",
+          "markdownDescription": "Enables the ble_disconnect_all command without any pre-configured scope."
         },
         {
           "description": "Enables the ble_forget command without any pre-configured scope.",
@@ -333,10 +369,52 @@
           "markdownDescription": "Enables the discord_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the ride_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ride-history",
+          "markdownDescription": "Enables the ride_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ride_latest command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ride-latest",
+          "markdownDescription": "Enables the ride_latest command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ride_push command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ride-push",
+          "markdownDescription": "Enables the ride_push command without any pre-configured scope."
+        },
+        {
           "description": "Enables the shim_log command without any pre-configured scope.",
           "type": "string",
           "const": "allow-shim-log",
           "markdownDescription": "Enables the shim_log command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_data_dir_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-data-dir-status",
+          "markdownDescription": "Enables the terra_data_dir_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_dismiss_data_dir_prompt command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-dismiss-data-dir-prompt",
+          "markdownDescription": "Enables the terra_dismiss_data_dir_prompt command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_pick_data_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-pick-data-dir",
+          "markdownDescription": "Enables the terra_pick_data_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_reset_all_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-reset-all-data",
+          "markdownDescription": "Enables the terra_reset_all_data command without any pre-configured scope."
         },
         {
           "description": "Denies the addon_http command without any pre-configured scope.",
@@ -381,6 +459,36 @@
           "markdownDescription": "Denies the addon_storage_set command without any pre-configured scope."
         },
         {
+          "description": "Denies the addon_tcp_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addon-tcp-close",
+          "markdownDescription": "Denies the addon_tcp_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the addon_tcp_connect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addon-tcp-connect",
+          "markdownDescription": "Denies the addon_tcp_connect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the addon_tcp_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addon-tcp-list",
+          "markdownDescription": "Denies the addon_tcp_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the addon_tcp_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addon-tcp-send",
+          "markdownDescription": "Denies the addon_tcp_send command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the addon_udp_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addon-udp-send",
+          "markdownDescription": "Denies the addon_udp_send command without any pre-configured scope."
+        },
+        {
           "description": "Denies the addons_activate command without any pre-configured scope.",
           "type": "string",
           "const": "deny-addons-activate",
@@ -409,6 +517,12 @@
           "type": "string",
           "const": "deny-ble-disconnect",
           "markdownDescription": "Denies the ble_disconnect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ble_disconnect_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ble-disconnect-all",
+          "markdownDescription": "Denies the ble_disconnect_all command without any pre-configured scope."
         },
         {
           "description": "Denies the ble_forget command without any pre-configured scope.",
@@ -495,10 +609,52 @@
           "markdownDescription": "Denies the discord_status command without any pre-configured scope."
         },
         {
+          "description": "Denies the ride_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ride-history",
+          "markdownDescription": "Denies the ride_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ride_latest command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ride-latest",
+          "markdownDescription": "Denies the ride_latest command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ride_push command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ride-push",
+          "markdownDescription": "Denies the ride_push command without any pre-configured scope."
+        },
+        {
           "description": "Denies the shim_log command without any pre-configured scope.",
           "type": "string",
           "const": "deny-shim-log",
           "markdownDescription": "Denies the shim_log command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_data_dir_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-data-dir-status",
+          "markdownDescription": "Denies the terra_data_dir_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_dismiss_data_dir_prompt command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-dismiss-data-dir-prompt",
+          "markdownDescription": "Denies the terra_dismiss_data_dir_prompt command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_pick_data_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-pick-data-dir",
+          "markdownDescription": "Denies the terra_pick_data_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_reset_all_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-reset-all-data",
+          "markdownDescription": "Denies the terra_reset_all_data command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

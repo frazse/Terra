@@ -46,8 +46,9 @@ echo ">>> Version synced"
 
 # ── 1. Build Rust backend ─────────────────────────────────────
 echo ">>> Building Rust backend (release)..."
-RUSTC=~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc \
-  ~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo build --release
+CARGO_BIN="${CARGO:-$(command -v cargo || echo "$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo")}"
+RUSTC_BIN="${RUSTC:-$(command -v rustc || echo "$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc")}"
+RUSTC="$RUSTC_BIN" "$CARGO_BIN" build --release
 echo ">>> Rust build done. Binary at target/release/terra"
 
 # ── 2. Install Electron dependencies ─────────────────────────

@@ -51,6 +51,10 @@ pub fn run() {
             crate::discord::discord_set_activity,
             crate::discord::discord_clear_activity,
             crate::discord::discord_status,
+            crate::android_data_dir::terra_pick_data_dir,
+            crate::android_data_dir::terra_data_dir_status,
+            crate::android_data_dir::terra_dismiss_data_dir_prompt,
+            crate::android_data_dir::terra_reset_all_data,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -90,10 +94,10 @@ pub fn run() {
             let is_rpc = std::env::args().any(|a| a == "--rpc");
 
             if is_rpc {
-                let app_handle = handle.clone();
+                let _app_handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
                     #[cfg(target_os = "linux")]
-                    crate::rpc::run_rpc_server(app_handle).await;
+                    crate::rpc::run_rpc_server(_app_handle).await;
                 });
             } else {
                 // Normal mode: create the webview window

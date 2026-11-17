@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-udp-send"
+description = "Enables the addon_udp_send command without any pre-configured scope."
+commands.allow = ["addon_udp_send"]
+
+[[permission]]
+identifier = "deny-addon-udp-send"
+description = "Denies the addon_udp_send command without any pre-configured scope."
+commands.deny = ["addon_udp_send"]

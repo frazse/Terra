@@ -121,17 +121,6 @@ fn describe(chr: &Uuid, b: &[u8]) -> String {
     }
 }
 
-/// Emit a JSON event to stdout (for the RPC layer to forward to the webview).
-fn js_event(event: &str, data: Value) {
-    let evt = serde_json::json!({ "event": event, "data": data });
-    if let Ok(line) = serde_json::to_string(&evt) {
-        use std::io::Write;
-        let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "{line}");
-        let _ = out.flush();
-    }
-}
-
 /// Call `window.__terra.<func>(...args)` in the biketerra webview.
 #[cfg(not(target_os = "linux"))]
 fn js(app: &AppHandle, func: &str, args: Vec<Value>) {
@@ -897,7 +886,7 @@ extern "C" {
 }
 
 #[cfg(target_os = "android")]
-fn alog(msg: &str) {
+pub(crate) fn alog(msg: &str) {
     let tag = match std::ffi::CString::new("TerraRustBle") {
         Ok(s) => s,
         Err(_) => return,
@@ -933,7 +922,7 @@ pub unsafe extern "C" fn JNI_OnLoad(
 }
 
 #[cfg(target_os = "android")]
-fn get_java_vm() -> Result<jni::JavaVM, String> {
+pub(crate) fn get_java_vm() -> Result<jni::JavaVM, String> {
     let ptr = JAVA_VM.load(std::sync::atomic::Ordering::SeqCst);
     if ptr.is_null() {
         return Err("JavaVM pointer is null".to_string());
@@ -1063,6 +1052,35 @@ pub unsafe extern "C" fn Java_dev_frazse_terra_BleManager_registerClassJni(
     } else {
         alog("ERROR: Some BleManager methods could not be found!");
     }
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn find_app_class<'local>(
+    env: &mut jni::JNIEnv<'local>,
+    name: &str,
+) -> Result<jni::objects::JClass<'local>, String> {
+    let read_guard = BLE_MANAGER_CLASS.read().map_err(|e| e.to_string())?;
+    let global_ref = read_guard
+        .as_ref()
+        .ok_or_else(|| "BleManager class not registered".to_string())?;
+    let ble_cls = unsafe { jni::objects::JObject::from_raw(global_ref.as_raw()) };
+    let loader = env
+        .call_method(&ble_cls, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .map_err(err)?
+        .l()
+        .map_err(err)?;
+    let jname = env.new_string(name).map_err(err)?;
+    let cls_obj = env
+        .call_method(
+            &loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[jni::objects::JValue::Object(&jname)],
+        )
+        .map_err(err)?
+        .l()
+        .map_err(err)?;
+    Ok(jni::objects::JClass::from(cls_obj))
 }
 
 #[cfg(target_os = "android")]
@@ -1215,10 +1233,66 @@ pub fn get_terra_storage_dir() -> PathBuf {
     dir
 }
 
+#[cfg(target_os = "android")]
+pub(crate) fn android_internal_files_dir(app: &AppHandle) -> Option<PathBuf> {
+    static FILES_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(p) = FILES_DIR.get() {
+        return Some(p.clone());
+    }
+    if let Ok(vm) = get_java_vm() {
+        if let Ok(mut env) = vm.attach_current_thread() {
+            if let Ok(cls) = find_app_class(&mut env, "dev.frazse.terra.MainActivity") {
+                if let Ok(val) =
+                    env.call_static_method(&cls, "getInternalFilesDir", "()Ljava/lang/String;", &[])
+                {
+                    if let Ok(obj) = val.l() {
+                        if !obj.is_null() {
+                            let jstr = jni::objects::JString::from(obj);
+                            let s_opt = env.get_string(&jstr).ok().map(String::from);
+                            if let Some(s) = s_opt {
+                                let p = PathBuf::from(s);
+                                if !p.as_os_str().is_empty() {
+                                    let _ = FILES_DIR.set(p.clone());
+                                    return Some(p);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+        }
+    }
+    app.path()
+        .data_dir()
+        .ok()
+        .map(|d| d.join("files"))
+        .or_else(|| app.path().app_data_dir().ok())
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn get_terra_storage_dir(app: &AppHandle) -> PathBuf {
     #[cfg(target_os = "android")]
     {
+        // Check for a user-picked data directory (SAF pointer file in internal filesDir)
+        if let Some(files_dir) = android_internal_files_dir(app) {
+            let pointer = files_dir.join("terra-data-dir.txt");
+            if let Ok(content) = std::fs::read_to_string(&pointer) {
+                let path = content.trim();
+                if !path.is_empty() {
+                    let dir = PathBuf::from(path);
+                    if dir.exists() || std::fs::create_dir_all(&dir).is_ok() {
+                        let _ = std::fs::create_dir_all(dir.join("addons"));
+                        let _ = std::fs::create_dir_all(dir.join("addon-data"));
+                        return dir;
+                    }
+                }
+            }
+        }
+
+        // Fall back to the default Android external files dir
         let ext = PathBuf::from("/storage/emulated/0/Android/data/dev.frazse.terra/files");
         if ext.exists() || std::fs::create_dir_all(&ext).is_ok() {
             let _ = std::fs::create_dir_all(ext.join("addons"));
@@ -1611,6 +1685,7 @@ impl Broker {
 }
 
 /// Failed GATT commands are always printed (they used to vanish: the page just saw a rejected promise).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn logged<T>(what: &str, id: &str, r: Result<T, String>) -> Result<T, String> {
     if let Err(e) = &r {
         eprintln!("[ble] {what} {id} FAILED: {e}");
@@ -1628,6 +1703,7 @@ pub fn broker<'a>(s: &'a State<'_, Ble>) -> Result<&'a Arc<Broker>, String> {
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_request_device(
     state: State<'_, Ble>,
     filters: Vec<Filter>,
@@ -1643,6 +1719,7 @@ pub async fn ble_request_device(
 
 /// Devices an addon paired earlier (so it can restore them without any UI).
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_remembered(state: State<'_, Ble>, owner: String) -> Result<Vec<DeviceInfo>, String> {
     let b = broker(&state)?;
     let known = b.known.lock().await;
@@ -1656,6 +1733,7 @@ pub async fn ble_remembered(state: State<'_, Ble>, owner: String) -> Result<Vec<
 /// Let the page (not just the owning addon) use the owner's devices, e.g. so Biketerra's own
 /// Zwift Ride support can take the controller during rides. Not persisted: addons set it per page load.
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_release(state: State<'_, Ble>, owner: String, released: bool) -> Result<(), String> {
     let b = broker(&state)?;
     let mut r = b.released.lock().await;
@@ -1668,33 +1746,39 @@ pub async fn ble_release(state: State<'_, Ble>, owner: String, released: bool) -
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_connect(state: State<'_, Ble>, id: String) -> Result<Vec<ServiceInfo>, String> {
     let r = broker(&state)?.connect(&id).await;
     logged("connect", &id, r)
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_disconnect(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.disconnect(&id).await
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_disconnect_all(state: State<'_, Ble>) -> Result<(), String> {
     broker(&state)?.disconnect_all().await
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_forget(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.forget(&id).await
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_read(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<String, String> {
     let r = broker(&state)?.read(&id, &service, &characteristic).await;
     logged(&format!("read {characteristic}"), &id, r)
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_write(
     state: State<'_, Ble>,
     id: String,
@@ -1708,30 +1792,105 @@ pub async fn ble_write(
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_subscribe(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<(), String> {
     let r = broker(&state)?.subscribe(&id, &service, &characteristic, true).await;
     logged(&format!("subscribe {characteristic}"), &id, r)
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_unsubscribe(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<(), String> {
     let r = broker(&state)?.subscribe(&id, &service, &characteristic, false).await;
     logged(&format!("unsubscribe {characteristic}"), &id, r)
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn chooser_candidates(state: State<'_, Ble>) -> Result<Vec<Candidate>, String> {
     Ok(broker(&state)?.candidates().await)
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn chooser_pick(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.resolve(Some(id)).await;
     Ok(())
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn chooser_cancel(state: State<'_, Ble>) -> Result<(), String> {
     broker(&state)?.resolve(None).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn props(name: Option<&str>, services: &[&str]) -> DiscoveredProps {
+        DiscoveredProps {
+            id: "AA:BB:CC:DD:EE:FF".into(),
+            name: name.map(String::from),
+            rssi: Some(-60),
+            services: services.iter().map(|s| Uuid::parse_str(s).unwrap()).collect(),
+        }
+    }
+
+    #[test]
+    fn filter_matches_short_and_full_uuid_and_name() {
+        let p = props(
+            Some("KICKR CORE 1234"),
+            &["00001826-0000-1000-8000-00805f9b34fb"],
+        );
+        let f_short = Filter { services: Some(vec!["1826".into()]), ..Default::default() };
+        let f_full = Filter {
+            services: Some(vec!["00001826-0000-1000-8000-00805f9b34fb".into()]),
+            ..Default::default()
+        };
+        let f_prefix = Filter { name_prefix: Some("KICKR".into()), ..Default::default() };
+        let f_other = Filter { services: Some(vec!["180d".into()]), ..Default::default() };
+
+        assert!(f_short.matches(&p));
+        assert!(f_full.matches(&p));
+        assert!(f_prefix.matches(&p));
+        assert!(!f_other.matches(&p));
+    }
+
+    #[test]
+    fn chooser_is_strict_while_wanted_is_lenient() {
+        let phone = props(Some("My Phone"), &[]);
+        let ftms_filter = vec![Filter { services: Some(vec!["1826".into()]), ..Default::default() }];
+
+        assert!(!chooser_matches(&phone, &ftms_filter, &[], false));
+        assert!(wanted(&phone, &ftms_filter, &[], false));
+
+        let excl = vec![Filter { name_prefix: Some("My ".into()), ..Default::default() }];
+        assert!(!wanted(&phone, &ftms_filter, &excl, false));
+        assert!(!chooser_matches(&phone, &[], &excl, true));
+    }
+
+    #[test]
+    fn rank_orders_trainer_before_power_csc_hr() {
+        let trainer = props(None, &["00001826-0000-1000-8000-00805f9b34fb"]);
+        let power = props(None, &["00001818-0000-1000-8000-00805f9b34fb"]);
+        let csc = props(None, &["00001816-0000-1000-8000-00805f9b34fb"]);
+        let hr = props(None, &["0000180d-0000-1000-8000-00805f9b34fb"]);
+        let other = props(None, &[]);
+
+        assert_eq!(rank(&trainer), 0);
+        assert_eq!(rank(&power), 1);
+        assert_eq!(rank(&csc), 2);
+        assert_eq!(rank(&hr), 3);
+        assert_eq!(rank(&other), 4);
+    }
+
+    #[test]
+    fn ftms_cp_decoding() {
+        assert_eq!(ftms_cp(&[0x00]).as_deref(), Some("RequestControl"));
+        assert_eq!(ftms_cp(&[0x05, 0xFA, 0x00]).as_deref(), Some("SetTargetPower 250 W"));
+        assert_eq!(ftms_cp(&[0x80, 0x05, 0x01]).as_deref(), Some("Response to 0x05: success"));
+        assert_eq!(ftms_cp(&[]), None);
+    }
 }
