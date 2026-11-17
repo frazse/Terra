@@ -192,7 +192,6 @@ live copy (or set `TERRA_ADDONS_DIR`) first.
 > - `scene-probe` — read-only probes of the engine's render-pool / misc-pool API.
 > - `bike-preview` — injects the game's bike GLTF geometry into the misc pool.
 > - `nameplates3d` — per-rider nameplates as real 3D textured quads in the engine render queue (the textured path behind `route-sign`; the live reference for ADDONS.md §C, incl. its texture readback / probe tooling).
-> - `sbs3d` — side-by-side stereo 3D for Viture XR glasses (single-window double-render of ONE game instance + composite; dual-Eye HUD mirror + stereo input bridge).
 > - `dss-probe` — one-shot diagnostic: dumps the game's live data + relevant DOM to `~/Downloads/Terra/dss-probe.json`.
 >
 > These are **not** shippable. They must **not** be added to the `addons/` submodule,
