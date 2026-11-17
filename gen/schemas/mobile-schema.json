@@ -315,6 +315,24 @@
           "markdownDescription": "Enables the chooser_pick command without any pre-configured scope."
         },
         {
+          "description": "Enables the discord_clear_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-discord-clear-activity",
+          "markdownDescription": "Enables the discord_clear_activity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the discord_set_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-discord-set-activity",
+          "markdownDescription": "Enables the discord_set_activity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the discord_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-discord-status",
+          "markdownDescription": "Enables the discord_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the shim_log command without any pre-configured scope.",
           "type": "string",
           "const": "allow-shim-log",
@@ -457,6 +475,24 @@
           "type": "string",
           "const": "deny-chooser-pick",
           "markdownDescription": "Denies the chooser_pick command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the discord_clear_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-discord-clear-activity",
+          "markdownDescription": "Denies the discord_clear_activity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the discord_set_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-discord-set-activity",
+          "markdownDescription": "Denies the discord_set_activity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the discord_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-discord-status",
+          "markdownDescription": "Denies the discord_status command without any pre-configured scope."
         },
         {
           "description": "Denies the shim_log command without any pre-configured scope.",

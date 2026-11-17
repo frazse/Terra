@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discord-clear-activity"
+description = "Enables the discord_clear_activity command without any pre-configured scope."
+commands.allow = ["discord_clear_activity"]
+
+[[permission]]
+identifier = "deny-discord-clear-activity"
+description = "Denies the discord_clear_activity command without any pre-configured scope."
+commands.deny = ["discord_clear_activity"]
