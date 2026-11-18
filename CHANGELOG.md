@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.0] — Android folder picker, `window.btApp` & Wi-Fi bridge on Android, and stability fixes
+
+### Added
+- **Android custom data folder picker** — first-launch setup modal and cog-menu folder picker (`terra_pick_data_dir`, `terra_data_dir_status`, `terra_reset_all_data`) allow storing `addons/`, `addon-data/`, and `devices.json` in a user-chosen visible folder (e.g. `/storage/emulated/0/Terra`) with non-destructive migration.
+- **`window.btApp` auto-publish (Android)** — `MainActivity` now wraps `RustWebViewClient` in `setContentView` to intercept Biketerra's `/_app/immutable/chunks/*.js` and expose `window.btApp` automatically without DevTools (matching Linux desktop).
+- **Android `wifi-trainer-bridge` & LAN permission** — `wifi-trainer-bridge` is now bundled in the APK (**disabled by default** in `manifest.json`) and `ACCESS_LOCAL_NETWORK` is declared and requested at runtime for Android 17 (API 37+) LAN TCP/UDP support.
+- **BLE auto-pair preference** — silent auto-pair now prefers devices matching `__terraMode` / `__terraPrefer` prefixes.
+
+### Changed
+- **Desktop AppImage no longer bundles addons** — removed `../addons` from `electron/package.json` `extraResources` so the Linux AppImage ships clean and loads addons from `~/.local/share/terra/addons/`.
+- **Settings cog anchor** — anchored the cog button cleanly next to Help in Biketerra's redesigned header.
+
+### Fixed
+- **Desktop BLE shutdown race** — `Broker::disconnect_all()` now sets `shutting_down`, aborts the auto-reconnect supervisor, stops scanning, and disconnects any in-flight/connected peripherals at the adapter level so devices don't reconnect after closing the AppImage.
+- **Sandboxed Discord IPC discovery** — Discord Rich Presence now discovers Flatpak/Snap Discord IPC sockets on Linux.
+- **Android BLE & stability hardening** — ProGuard/R8 JNI keep rules (`proguard-rules.pro`), Android ACL capability updates (`discord_*`, `terra_*`, `addon_tcp_*`, `addon_udp_send`, `ride_*`), and compiler/build warning cleanup.
+
 ## [0.8.0] — Settings UI 2.0, addon pipeline hardening & Android upgrades
 
 ### Added
