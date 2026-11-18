@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addons-install-github"
+description = "Enables the addons_install_github command without any pre-configured scope."
+commands.allow = ["addons_install_github"]
+
+[[permission]]
+identifier = "deny-addons-install-github"
+description = "Denies the addons_install_github command without any pre-configured scope."
+commands.deny = ["addons_install_github"]

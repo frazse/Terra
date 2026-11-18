@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addons-catalog"
+description = "Enables the addons_catalog command without any pre-configured scope."
+commands.allow = ["addons_catalog"]
+
+[[permission]]
+identifier = "deny-addons-catalog"
+description = "Denies the addons_catalog command without any pre-configured scope."
+commands.deny = ["addons_catalog"]

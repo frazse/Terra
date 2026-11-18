@@ -189,10 +189,28 @@
           "markdownDescription": "Enables the addon_save_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the addon_settings_export command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addon-settings-export",
+          "markdownDescription": "Enables the addon_settings_export command without any pre-configured scope."
+        },
+        {
           "description": "Enables the addon_settings_get command without any pre-configured scope.",
           "type": "string",
           "const": "allow-addon-settings-get",
           "markdownDescription": "Enables the addon_settings_get command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the addon_settings_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addon-settings-import",
+          "markdownDescription": "Enables the addon_settings_import command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the addon_settings_reset command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addon-settings-reset",
+          "markdownDescription": "Enables the addon_settings_reset command without any pre-configured scope."
         },
         {
           "description": "Enables the addon_settings_set command without any pre-configured scope.",
@@ -255,6 +273,24 @@
           "markdownDescription": "Enables the addons_activate command without any pre-configured scope."
         },
         {
+          "description": "Enables the addons_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addons-catalog",
+          "markdownDescription": "Enables the addons_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the addons_install_github command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addons-install-github",
+          "markdownDescription": "Enables the addons_install_github command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the addons_install_zip command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addons-install-zip",
+          "markdownDescription": "Enables the addons_install_zip command without any pre-configured scope."
+        },
+        {
           "description": "Enables the addons_list command without any pre-configured scope.",
           "type": "string",
           "const": "allow-addons-list",
@@ -267,10 +303,22 @@
           "markdownDescription": "Enables the addons_set_enabled command without any pre-configured scope."
         },
         {
+          "description": "Enables the addons_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-addons-uninstall",
+          "markdownDescription": "Enables the addons_uninstall command without any pre-configured scope."
+        },
+        {
           "description": "Enables the ble_connect command without any pre-configured scope.",
           "type": "string",
           "const": "allow-ble-connect",
           "markdownDescription": "Enables the ble_connect command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ble_devices_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ble-devices-status",
+          "markdownDescription": "Enables the ble_devices_status command without any pre-configured scope."
         },
         {
           "description": "Enables the ble_disconnect command without any pre-configured scope.",
@@ -283,6 +331,18 @@
           "type": "string",
           "const": "allow-ble-disconnect-all",
           "markdownDescription": "Enables the ble_disconnect_all command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ble_drop_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ble-drop-all",
+          "markdownDescription": "Enables the ble_drop_all command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ble_drop_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ble-drop-device",
+          "markdownDescription": "Enables the ble_drop_device command without any pre-configured scope."
         },
         {
           "description": "Enables the ble_forget command without any pre-configured scope.",
@@ -429,10 +489,28 @@
           "markdownDescription": "Denies the addon_save_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the addon_settings_export command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addon-settings-export",
+          "markdownDescription": "Denies the addon_settings_export command without any pre-configured scope."
+        },
+        {
           "description": "Denies the addon_settings_get command without any pre-configured scope.",
           "type": "string",
           "const": "deny-addon-settings-get",
           "markdownDescription": "Denies the addon_settings_get command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the addon_settings_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addon-settings-import",
+          "markdownDescription": "Denies the addon_settings_import command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the addon_settings_reset command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addon-settings-reset",
+          "markdownDescription": "Denies the addon_settings_reset command without any pre-configured scope."
         },
         {
           "description": "Denies the addon_settings_set command without any pre-configured scope.",
@@ -495,6 +573,24 @@
           "markdownDescription": "Denies the addons_activate command without any pre-configured scope."
         },
         {
+          "description": "Denies the addons_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addons-catalog",
+          "markdownDescription": "Denies the addons_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the addons_install_github command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addons-install-github",
+          "markdownDescription": "Denies the addons_install_github command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the addons_install_zip command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addons-install-zip",
+          "markdownDescription": "Denies the addons_install_zip command without any pre-configured scope."
+        },
+        {
           "description": "Denies the addons_list command without any pre-configured scope.",
           "type": "string",
           "const": "deny-addons-list",
@@ -507,10 +603,22 @@
           "markdownDescription": "Denies the addons_set_enabled command without any pre-configured scope."
         },
         {
+          "description": "Denies the addons_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-addons-uninstall",
+          "markdownDescription": "Denies the addons_uninstall command without any pre-configured scope."
+        },
+        {
           "description": "Denies the ble_connect command without any pre-configured scope.",
           "type": "string",
           "const": "deny-ble-connect",
           "markdownDescription": "Denies the ble_connect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ble_devices_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ble-devices-status",
+          "markdownDescription": "Denies the ble_devices_status command without any pre-configured scope."
         },
         {
           "description": "Denies the ble_disconnect command without any pre-configured scope.",
@@ -523,6 +631,18 @@
           "type": "string",
           "const": "deny-ble-disconnect-all",
           "markdownDescription": "Denies the ble_disconnect_all command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ble_drop_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ble-drop-all",
+          "markdownDescription": "Denies the ble_drop_all command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ble_drop_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ble-drop-device",
+          "markdownDescription": "Denies the ble_drop_device command without any pre-configured scope."
         },
         {
           "description": "Denies the ble_forget command without any pre-configured scope.",

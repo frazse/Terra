@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ble-drop-all"
+description = "Enables the ble_drop_all command without any pre-configured scope."
+commands.allow = ["ble_drop_all"]
+
+[[permission]]
+identifier = "deny-ble-drop-all"
+description = "Denies the ble_drop_all command without any pre-configured scope."
+commands.deny = ["ble_drop_all"]
