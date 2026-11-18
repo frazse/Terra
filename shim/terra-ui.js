@@ -118,7 +118,7 @@
 .terra-setup-foot { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; padding: 12px 20px 16px; border-top: 1px solid #25252d; }
 .terra-btn-danger { background: #3a1a1a; border: 1px solid #6b2020; color: #e06060; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
 .terra-btn-danger:hover { background: #4a2020; }
-canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"], [class*="profile"] {
+canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
   will-change: transform;
   transform: translateZ(0);
   backface-visibility: hidden;

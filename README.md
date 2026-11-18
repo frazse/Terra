@@ -81,7 +81,7 @@ npm run dist
 
 The AppImage is generated at:
 ```text
-electron/dist/Terra-0.10.0.AppImage
+electron/dist/Terra-0.10.1.AppImage
 ```
 
 (Or just run `./build.sh`, which syncs the version everywhere, builds Rust, and packages it.)

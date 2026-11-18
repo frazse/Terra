@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1] — Account Flyout Interaction Fix & Bundled Addon Refresh
+
+### Fixed
+- **Account menu flyout clicks blocked** — removed `[class*="profile"]` from the GPU layer promotion selector in `shim/terra-ui.js` (`transform: translateZ(0)` on `.nav-profile` had trapped `.nav-dropdown` underneath `.flyout-fog` in Biketerra's header).
+
+### Changed
+- **Refreshed `Terra-Addons` submodule (`zwift-ride` v0.6.3)** — includes the 2-column athlete profile layout, Console UI toggle, virtual OpenBikeControl shifter for auto Virtual Shifting, and controller battery mirroring.
+
 ## [0.10.0] — In-app GitHub Addon Catalog, ZIP Installer, Settings Backup & BLE Manager
 
 ### Added
