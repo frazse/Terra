@@ -5,7 +5,10 @@
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -354,6 +357,8 @@ pub struct Broker {
     pending: Mutex<Option<Pending>>,
     /// Addon ids that currently let the page use their devices (see `ble_release`).
     pub released: Mutex<HashSet<String>>,
+    shutting_down: AtomicBool,
+    supervisor_task: Mutex<Option<JoinHandle<()>>>,
     store: PathBuf,
 }
 
@@ -392,10 +397,12 @@ impl Broker {
             conn_locks: Mutex::new(HashMap::new()),
             pending: Mutex::new(None),
             released: Mutex::new(HashSet::new()),
+            shutting_down: AtomicBool::new(false),
+            supervisor_task: Mutex::new(None),
             store,
         });
         b.spawn_event_loop();
-        b.spawn_supervisor();
+        b.spawn_supervisor().await;
         Ok(b)
     }
 
@@ -419,12 +426,18 @@ impl Broker {
         });
     }
 
-    fn spawn_supervisor(self: &Arc<Self>) {
+    async fn spawn_supervisor(self: &Arc<Self>) {
         let me = self.clone();
-        spawn_task(async move {
+        let handle = spawn_task(async move {
             let mut scanning = false;
             loop {
                 sleep(Duration::from_secs(3)).await;
+                if me.shutting_down.load(Ordering::SeqCst) {
+                    if scanning {
+                        let _ = me.adapter.stop_scan().await;
+                    }
+                    break;
+                }
                 if me.pending.lock().await.is_some() {
                     scanning = false;
                     continue;
@@ -439,6 +452,9 @@ impl Broker {
                     let excluded = me.app.as_ref().map(crate::addons::bt_exclude_names).unwrap_or_default();
                     let list = me.adapter.peripherals().await.unwrap_or_default();
                     for k in &known {
+                        if me.shutting_down.load(Ordering::SeqCst) {
+                            break;
+                        }
                         if k.name.as_deref().map_or(false, |n| excluded.contains(n)) {
                             continue;
                         }
@@ -454,14 +470,25 @@ impl Broker {
                         }
                         missing = true;
                         let visible = matches!(p.properties().await, Ok(Some(ref pr)) if pr.rssi.is_some());
-                        if visible && me.connecting.lock().await.insert(k.id.clone()) {
+                        if visible
+                            && !me.shutting_down.load(Ordering::SeqCst)
+                            && me.connecting.lock().await.insert(k.id.clone())
+                        {
                             let (me2, p2, id) = (me.clone(), p.clone(), k.id.clone());
                             spawn_task(async move {
                                 let r = timeout(Duration::from_secs(20), async {
                                     p2.connect().await?;
+                                    if me2.shutting_down.load(Ordering::SeqCst) {
+                                        return Ok(());
+                                    }
                                     p2.discover_services().await
                                 })
                                 .await;
+                                if me2.shutting_down.load(Ordering::SeqCst) {
+                                    let _ = timeout(Duration::from_secs(3), p2.disconnect()).await;
+                                    me2.connecting.lock().await.remove(&id);
+                                    return;
+                                }
                                 match r {
                                     Ok(Ok(())) => {
                                         println!("[terra] auto-connected {id}");
@@ -474,6 +501,12 @@ impl Broker {
                         }
                     }
                 }
+                if me.shutting_down.load(Ordering::SeqCst) {
+                    if scanning {
+                        let _ = me.adapter.stop_scan().await;
+                    }
+                    break;
+                }
                 if missing && !scanning {
                     scanning = me.adapter.start_scan(ScanFilter::default()).await.is_ok();
                     println!("[terra] scanning for remembered devices (started: {scanning})");
@@ -483,6 +516,7 @@ impl Broker {
                 }
             }
         });
+        *self.supervisor_task.lock().await = Some(handle);
     }
 
     async fn get(&self, id: &str) -> Result<Peripheral, String> {
@@ -532,18 +566,68 @@ impl Broker {
     /// at the OS level and re-parks a GATT link the moment a client drops it.
     /// Worst case for 3 devices: 3×4 s + 0.5 s + 3×3 s ≈ 21.5 s < 30 s budget.
     pub async fn disconnect_all(&self) -> Result<(), String> {
-        let peripherals = self.peripherals.lock().await.clone();
-        for (id, p) in &peripherals {
+        // Stop auto-reconnect & scanning immediately so the supervisor cannot
+        // fire a new `connect()` while we tear down existing links.
+        self.shutting_down.store(true, Ordering::SeqCst);
+        if let Some(t) = self.supervisor_task.lock().await.take() {
+            t.abort();
+        }
+        let _ = timeout(Duration::from_secs(2), self.adapter.stop_scan()).await;
+
+        let mut nt = self.notify_tasks.lock().await;
+        for (id, t) in nt.drain() {
+            t.abort();
+            println!("[ble] shutdown: aborted notify task {id}");
+        }
+        drop(nt);
+        self.subs.lock().await.clear();
+
+        // Collect every peripheral we tracked OR that is currently in `known` /
+        // `connecting` at the adapter level so in-flight auto-connects are caught too.
+        let mut targets = self.peripherals.lock().await.clone();
+        let known_ids: HashSet<String> = self.known.lock().await.iter().map(|k| k.id.clone()).collect();
+        let inflight_ids = self.connecting.lock().await.clone();
+        if let Ok(list) = self.adapter.peripherals().await {
+            for p in list {
+                let id = p.id().to_string();
+                if !targets.contains_key(&id) && (known_ids.contains(&id) || inflight_ids.contains(&id)) {
+                    targets.insert(id, p);
+                }
+            }
+        }
+
+        for (id, p) in &targets {
+            if !p.is_connected().await.unwrap_or(false) {
+                continue;
+            }
             match timeout(Duration::from_secs(4), p.disconnect()).await {
                 Ok(Ok(())) => println!("[ble] shutdown: disconnected {id}"),
                 Ok(Err(e)) => eprintln!("[ble] shutdown: disconnect {id} failed: {e}"),
                 Err(_) => eprintln!("[ble] shutdown: disconnect {id} timed out"),
             }
         }
+
+        // Wait briefly for any in-flight `p2.connect()` to settle (it checks
+        // `shutting_down` and self-disconnects) before the second pass.
+        for _ in 0..10 {
+            if self.connecting.lock().await.is_empty() {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+
         // Let BlueZ settle, then re-check: anything still up gets one more pass.
         sleep(Duration::from_millis(500)).await;
-        let peripherals = self.peripherals.lock().await.clone();
-        for (id, p) in &peripherals {
+        let mut recheck = targets;
+        if let Ok(list) = self.adapter.peripherals().await {
+            for p in list {
+                let id = p.id().to_string();
+                if known_ids.contains(&id) {
+                    recheck.entry(id).or_insert(p);
+                }
+            }
+        }
+        for (id, p) in &recheck {
             if !p.is_connected().await.unwrap_or(false) {
                 continue;
             }
@@ -553,12 +637,6 @@ impl Broker {
                 Err(_) => eprintln!("[ble] shutdown: 2nd pass {id} timed out"),
             }
         }
-        let mut nt = self.notify_tasks.lock().await;
-        for (id, t) in nt.drain() {
-            t.abort();
-            println!("[ble] shutdown: aborted notify task {id}");
-        }
-        self.subs.lock().await.clear();
         self.peripherals.lock().await.clear();
         Ok(())
     }
@@ -743,6 +821,9 @@ impl Broker {
     }
 
     pub async fn connect(&self, id: &str) -> Result<Vec<ServiceInfo>, String> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err("BLE broker is shutting down".into());
+        }
         let p = self.get(id).await?;
         if !p.is_connected().await.unwrap_or(false) {
             p.connect().await.map_err(err)?;

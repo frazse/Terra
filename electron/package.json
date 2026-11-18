@@ -28,10 +28,6 @@
       {
         "from": "../shim",
         "to": "shim"
-      },
-      {
-        "from": "../addons",
-        "to": "addons"
       }
     ],
     "files": [
