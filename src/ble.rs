@@ -295,6 +295,15 @@ pub struct DeviceInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct BleDeviceStatus {
+    pub id: String,
+    pub name: Option<String>,
+    pub owner: Option<String>,
+    pub connected: bool,
+    pub remembered: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CharInfo {
     uuid: String,
@@ -655,6 +664,81 @@ impl Broker {
             let _ = p.disconnect().await;
         }
         Ok(())
+    }
+
+    pub async fn drop_device(&self, id: &str) -> Result<(), String> {
+        if let Some(t) = self.notify_tasks.lock().await.remove(id) {
+            t.abort();
+        }
+        self.subs.lock().await.retain(|(d, _)| d != id);
+        if let Some(p) = self.peripherals.lock().await.remove(id) {
+            let _ = timeout(Duration::from_secs(4), p.disconnect()).await;
+        } else if let Ok(list) = self.adapter.peripherals().await {
+            if let Some(p) = list.into_iter().find(|p| p.id().to_string() == id) {
+                let _ = timeout(Duration::from_secs(4), p.disconnect()).await;
+            }
+        }
+        js(self.app.as_ref(), "disconnected", vec![json!(id)]);
+        Ok(())
+    }
+
+    pub async fn drop_all(&self) -> Result<(), String> {
+        let mut nt = self.notify_tasks.lock().await;
+        for (_, t) in nt.drain() {
+            t.abort();
+        }
+        drop(nt);
+        self.subs.lock().await.clear();
+        let drained: Vec<(String, Peripheral)> = self.peripherals.lock().await.drain().collect();
+        for (id, p) in drained {
+            if p.is_connected().await.unwrap_or(false) {
+                let _ = timeout(Duration::from_secs(4), p.disconnect()).await;
+            }
+            js(self.app.as_ref(), "disconnected", vec![json!(id)]);
+        }
+        Ok(())
+    }
+
+    pub async fn devices_status(&self) -> Vec<BleDeviceStatus> {
+        let known = self.known.lock().await.clone();
+        let mut by_id: HashMap<String, Peripheral> = self.peripherals.lock().await.clone();
+        if let Ok(list) = self.adapter.peripherals().await {
+            for p in list {
+                by_id.entry(p.id().to_string()).or_insert(p);
+            }
+        }
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for k in &known {
+            seen.insert(k.id.clone());
+            let connected = match by_id.get(&k.id) {
+                Some(p) => p.is_connected().await.unwrap_or(false),
+                None => false,
+            };
+            out.push(BleDeviceStatus {
+                id: k.id.clone(),
+                name: k.name.clone(),
+                owner: k.owner.clone(),
+                connected,
+                remembered: true,
+            });
+        }
+        for (id, p) in by_id {
+            if seen.contains(&id) {
+                continue;
+            }
+            if p.is_connected().await.unwrap_or(false) {
+                let name = p.properties().await.ok().flatten().and_then(|pr| pr.local_name);
+                out.push(BleDeviceStatus {
+                    id,
+                    name,
+                    owner: None,
+                    connected: true,
+                    remembered: false,
+                });
+            }
+        }
+        out
     }
 
     async fn remembered_match(&self, filters: &[Filter], excl: &[Filter], all: bool) -> Option<DeviceInfo> {
@@ -1763,6 +1847,43 @@ impl Broker {
         let _ = self.disconnect(id).await;
         Ok(())
     }
+
+    pub async fn drop_device(&self, id: &str) -> Result<(), String> {
+        if let Ok(vm) = get_java_vm() {
+            if let Ok(env) = vm.attach_current_thread() {
+                if let Ok(j_id) = env.new_string(id) {
+                    let _ = call_ble_manager("disconnect", "(Ljava/lang/String;)V", &[jni::objects::JValue::Object(&j_id)]);
+                }
+            }
+        }
+        js(&self.app, "disconnected", vec![json!(id)]);
+        Ok(())
+    }
+
+    pub async fn drop_all(&self) -> Result<(), String> {
+        let ids = self.known.lock().await.iter().map(|k| k.id.clone()).collect::<Vec<_>>();
+        for id in ids {
+            let _ = self.drop_device(&id).await;
+        }
+        Ok(())
+    }
+
+    pub async fn devices_status(&self) -> Vec<BleDeviceStatus> {
+        let known = self.known.lock().await.clone();
+        known
+            .into_iter()
+            .map(|k| {
+                let connected = self.is_connected(&k.id);
+                BleDeviceStatus {
+                    id: k.id,
+                    name: k.name,
+                    owner: k.owner,
+                    connected,
+                    remembered: true,
+                }
+            })
+            .collect()
+    }
 }
 
 /// Failed GATT commands are always printed (they used to vanish: the page just saw a rejected promise).
@@ -1849,6 +1970,24 @@ pub async fn ble_disconnect_all(state: State<'_, Ble>) -> Result<(), String> {
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 pub async fn ble_forget(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.forget(&id).await
+}
+
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub async fn ble_devices_status(state: State<'_, Ble>) -> Result<Vec<BleDeviceStatus>, String> {
+    Ok(broker(&state)?.devices_status().await)
+}
+
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub async fn ble_drop_device(state: State<'_, Ble>, id: String) -> Result<(), String> {
+    broker(&state)?.drop_device(&id).await
+}
+
+#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub async fn ble_drop_all(state: State<'_, Ble>) -> Result<(), String> {
+    broker(&state)?.drop_all().await
 }
 
 #[cfg_attr(not(target_os = "linux"), tauri::command)]

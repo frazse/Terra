@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0] — In-app GitHub Addon Catalog, ZIP Installer, Settings Backup & BLE Manager
+
+### Added
+- **In-app GitHub Addon Catalog & ZIP Installer** — browse and install/update addons directly from `frazse/Terra-Addons` (`addons_catalog`, `addons_install_github`), install `.zip` addon bundles (`addons_install_zip` using pure-Rust `flate2`/`crc32fast` extraction), and uninstall user-installed addons or overrides (`addons_uninstall`) from the Cog menu.
+- **Addon settings backup** — export and import non-secret addon settings and storage JSON per addon (`addon_settings_export`, `addon_settings_import`).
+- **BLE device manager** — view connected and remembered Bluetooth devices in the Cog menu (`ble_devices_status`), disconnect individual or all active devices (`ble_drop_device`, `ble_drop_all`), and forget remembered pairings (`ble_forget`).
+
 ## [0.9.0] — Android folder picker, `window.btApp` & Wi-Fi bridge on Android, and stability fixes
 
 ### Added

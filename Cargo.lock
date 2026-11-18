@@ -3801,11 +3801,13 @@ dependencies = [
 
 [[package]]
 name = "terra"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "btleplug",
+ "crc32fast",
  "dirs 5.0.1",
+ "flate2",
  "futures",
  "jni 0.21.1",
  "reqwest 0.12.28",

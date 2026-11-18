@@ -144,6 +144,55 @@ async fn dispatch_rpc_command(
             Ok(json!(null))
         }
 
+        "addon_settings_reset" => {
+            let store: State<'_, crate::addons::AddonStore> = app.state();
+            let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?.to_string();
+            crate::addons::addon_settings_reset(app.clone(), store, id).await?;
+            Ok(json!(null))
+        }
+
+        "addon_settings_export" => {
+            let store: State<'_, crate::addons::AddonStore> = app.state();
+            let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?.to_string();
+            let res = crate::addons::addon_settings_export(app.clone(), store, id).await?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+
+        "addon_settings_import" => {
+            let store: State<'_, crate::addons::AddonStore> = app.state();
+            let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?.to_string();
+            let payload = args_val.get("payload").cloned().ok_or("missing payload")?;
+            let res = crate::addons::addon_settings_import(app.clone(), store, id, payload).await?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+
+        "addons_catalog" => {
+            let store: State<'_, crate::addons::AddonStore> = app.state();
+            let refresh = args_val.get("refresh").and_then(|v| v.as_bool());
+            let res = crate::addons::addons_catalog(app.clone(), store, refresh).await?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+
+        "addons_install_github" => {
+            let store: State<'_, crate::addons::AddonStore> = app.state();
+            let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?.to_string();
+            let res = crate::addons::addons_install_github(app.clone(), store, id).await?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+
+        "addons_install_zip" => {
+            let base64 = args_val.get("base64").and_then(|v| v.as_str()).ok_or("missing base64")?.to_string();
+            let filename = args_val.get("filename").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let res = crate::addons::addons_install_zip(app.clone(), base64, filename).await?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+
+        "addons_uninstall" => {
+            let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?.to_string();
+            let res = crate::addons::addons_uninstall(app.clone(), id).await?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+
         "addon_http" => {
             let store: State<'_, crate::addons::AddonStore> = app.state();
             let addon = args_val.get("addon").and_then(|v| v.as_str()).ok_or("missing addon")?.to_string();
@@ -241,6 +290,28 @@ async fn dispatch_rpc_command(
             let broker = crate::ble::broker(&ble_state)?;
             let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?;
             broker.forget(id).await?;
+            Ok(json!(null))
+        }
+
+        "ble_devices_status" => {
+            let ble_state: State<'_, crate::ble::Ble> = app.state();
+            let broker = crate::ble::broker(&ble_state)?;
+            let list = broker.devices_status().await;
+            serde_json::to_value(list).map_err(|e| e.to_string())
+        }
+
+        "ble_drop_device" => {
+            let ble_state: State<'_, crate::ble::Ble> = app.state();
+            let broker = crate::ble::broker(&ble_state)?;
+            let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?;
+            broker.drop_device(id).await?;
+            Ok(json!(null))
+        }
+
+        "ble_drop_all" => {
+            let ble_state: State<'_, crate::ble::Ble> = app.state();
+            let broker = crate::ble::broker(&ble_state)?;
+            broker.drop_all().await?;
             Ok(json!(null))
         }
 
