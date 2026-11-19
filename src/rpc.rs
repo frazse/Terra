@@ -443,6 +443,11 @@ async fn dispatch_rpc_command(
             crate::discord::discord_status(app.clone(), st).await
         }
 
+        "perf_stats" => {
+            let st: State<'_, crate::perf::PerfState> = app.state();
+            crate::perf::perf_stats(st).await
+        }
+
         "terra_data_dir_status" => {
             crate::android_data_dir::terra_data_dir_status(app.clone())
         }

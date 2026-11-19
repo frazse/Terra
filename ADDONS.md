@@ -54,6 +54,7 @@ The addon starts when the URL matches (also after SPA navigation) and is cleaned
  | `terra.tcp.list()` | this addon's open connections, `[{conn, peer}]` (diagnostics) |
  | `terra.tcp.onFrame(cb)` | inbound bytes: `{conn, bytes: DataView}`. The page is the only door in and out; framing is the addon's job |
  | `terra.tcp.onState(cb)` | lifecycle: `{conn, state: 'connected' | 'closed' | 'error', reason?, peer?}` |
+| `terra.perf.stats()` | async, hardware & app performance snapshot: `{platform, cpuPct, cpuTempC, appCpuPct, gpuPct, gpuTempC, gpuVramUsedMb, gpuVramTotalMb, memUsedMb, memTotalMb, thermalStatus, batteryTempC, gpuProcCpuPct?, rendererCpuPct?, appMemMb?}` (unavailable fields are `null`) |
 
 `navigator.bluetooth` also works inside addons (Terra's shim), so addons can pair and talk to their
 own devices with the normal Web Bluetooth API. Remembered devices pair instantly, new ones open the chooser.

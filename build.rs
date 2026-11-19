@@ -54,6 +54,7 @@ fn main() {
                 "discord_set_activity",
                 "discord_clear_activity",
                 "discord_status",
+                "perf_stats",
                 "terra_pick_data_dir",
                 "terra_data_dir_status",
                 "terra_dismiss_data_dir_prompt",

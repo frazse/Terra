@@ -18,6 +18,9 @@ pub fn run() {
     // Discord Rich Presence client (terra.discord)
     app.manage(crate::discord::Discord::new());
 
+    // Performance telemetry sampler (terra.perf)
+    app.manage(crate::perf::PerfState::new());
+
     // Log addon directories and loaded addons
     for dir in crate::addons::addon_dirs(&app) {
         println!("[terra] addon dir: {}", dir.display());

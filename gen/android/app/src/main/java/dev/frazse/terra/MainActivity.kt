@@ -1,15 +1,22 @@
 package dev.frazse.terra
 
 import android.Manifest
+import android.app.ActivityManager
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Message
+import android.os.PowerManager
+import android.os.Process
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.Settings
 import android.view.KeyEvent
@@ -107,6 +114,105 @@ class MainActivity : TauriActivity() {
     @JvmStatic
     fun getInternalFilesDir(): String {
       return instance?.filesDir?.absolutePath ?: ""
+    }
+
+    private var prevProcCpuMs: Long = -1L
+    private var prevProcWallMs: Long = -1L
+
+    @Keep
+    @JvmStatic
+    fun getPerfStatsJson(): String {
+      val obj = org.json.JSONObject()
+      val act = instance ?: return obj.toString()
+
+      try {
+        val nowCpuMs = Process.getElapsedCpuTime()
+        val nowWallMs = SystemClock.elapsedRealtime()
+        if (prevProcCpuMs >= 0L && prevProcWallMs >= 0L && nowWallMs > prevProcWallMs) {
+          val dCpu = (nowCpuMs - prevProcCpuMs).coerceAtLeast(0L)
+          val dWall = nowWallMs - prevProcWallMs
+          val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+          val pct = ((dCpu.toDouble() / dWall.toDouble()) * 100.0 / cores.toDouble()).coerceIn(0.0, 100.0)
+          obj.put("appCpuPct", Math.round(pct * 10.0) / 10.0)
+        }
+        prevProcCpuMs = nowCpuMs
+        prevProcWallMs = nowWallMs
+      } catch (_: Exception) {}
+
+      try {
+        val am = act.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        if (am != null) {
+          val mi = ActivityManager.MemoryInfo()
+          am.getMemoryInfo(mi)
+          val totalMb = mi.totalMem / (1024.0 * 1024.0)
+          val usedMb = (mi.totalMem - mi.availMem).coerceAtLeast(0L) / (1024.0 * 1024.0)
+          obj.put("memTotalMb", Math.round(totalMb * 10.0) / 10.0)
+          obj.put("memUsedMb", Math.round(usedMb * 10.0) / 10.0)
+        }
+      } catch (_: Exception) {}
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        try {
+          val pm = act.getSystemService(Context.POWER_SERVICE) as? PowerManager
+          if (pm != null) {
+            val statusStr = when (pm.currentThermalStatus) {
+              PowerManager.THERMAL_STATUS_NONE -> "none"
+              PowerManager.THERMAL_STATUS_LIGHT -> "light"
+              PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
+              PowerManager.THERMAL_STATUS_SEVERE -> "severe"
+              PowerManager.THERMAL_STATUS_CRITICAL -> "critical"
+              PowerManager.THERMAL_STATUS_EMERGENCY -> "emergency"
+              PowerManager.THERMAL_STATUS_SHUTDOWN -> "shutdown"
+              else -> null
+            }
+            if (statusStr != null) obj.put("thermalStatus", statusStr)
+          }
+        } catch (_: Exception) {}
+      }
+
+      try {
+        val battIntent = act.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val rawTemp = battIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE) ?: Int.MIN_VALUE
+        if (rawTemp in -500..1500) {
+          obj.put("batteryTempC", rawTemp / 10.0)
+        }
+      } catch (_: Exception) {}
+
+      try {
+        val kgsl = File("/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage")
+        if (kgsl.canRead()) {
+          val pct = kgsl.readText().replace("%", "").trim().toDoubleOrNull()
+          if (pct != null && pct in 0.0..100.0) {
+            obj.put("gpuPct", Math.round(pct * 10.0) / 10.0)
+          }
+        }
+      } catch (_: Exception) {}
+
+      try {
+        var cpuTemp: Double? = null
+        var gpuTemp: Double? = null
+        for (i in 0 until 24) {
+          val dir = File("/sys/class/thermal/thermal_zone$i")
+          val typeFile = File(dir, "type")
+          val tempFile = File(dir, "temp")
+          if (!typeFile.canRead() || !tempFile.canRead()) continue
+          val tname = typeFile.readText().trim().lowercase()
+          val raw = tempFile.readText().trim().toDoubleOrNull() ?: continue
+          val c = if (raw > 1000.0) raw / 1000.0 else raw
+          if (c !in 0.0..130.0) continue
+          if (cpuTemp == null && (tname.contains("cpu") || tname.contains("soc") || tname.contains("tsens"))) {
+            cpuTemp = Math.round(c * 10.0) / 10.0
+          }
+          if (gpuTemp == null && tname.contains("gpu")) {
+            gpuTemp = Math.round(c * 10.0) / 10.0
+          }
+          if (cpuTemp != null && gpuTemp != null) break
+        }
+        if (cpuTemp != null) obj.put("cpuTempC", cpuTemp)
+        if (gpuTemp != null) obj.put("gpuTempC", gpuTemp)
+      } catch (_: Exception) {}
+
+      return obj.toString()
     }
   }
 

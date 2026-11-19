@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, Menu, net, powerSaveBlocker } = require('electron');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -143,9 +144,85 @@ function sendRpc(cmd, args) {
   });
 }
 
-ipcMain.handle('tauri-invoke', (event, payload) => {
+let prevNodeCpus = null;
+
+function readNodeSystemCpuPct() {
+  try {
+    const cur = os.cpus();
+    if (!cur || !cur.length) return null;
+    if (!prevNodeCpus || prevNodeCpus.length !== cur.length) {
+      prevNodeCpus = cur;
+      return null;
+    }
+    let idleDelta = 0;
+    let totalDelta = 0;
+    for (let i = 0; i < cur.length; i++) {
+      const a = prevNodeCpus[i].times;
+      const b = cur[i].times;
+      const dIdle = Math.max(0, b.idle - a.idle);
+      const dTotal = Math.max(0, (b.user - a.user) + (b.nice - a.nice) + (b.sys - a.sys) + (b.irq - a.irq) + dIdle);
+      idleDelta += dIdle;
+      totalDelta += dTotal;
+    }
+    prevNodeCpus = cur;
+    if (totalDelta <= 0) return null;
+    const pct = ((totalDelta - idleDelta) / totalDelta) * 100;
+    return Math.round(Math.max(0, Math.min(100, pct)) * 10) / 10;
+  } catch {
+    return null;
+  }
+}
+
+function mergeElectronPerfStats(rustStats) {
+  const out = Object.assign({ platform: process.platform }, rustStats || {});
+  const numCpus = Math.max(1, (os.cpus() && os.cpus().length) || 1);
+
+  try {
+    const metrics = app.getAppMetrics();
+    let totalCpu = 0;
+    let gpuCpu = 0;
+    let rendererCpu = 0;
+    let totalMemKb = 0;
+    for (const m of metrics) {
+      const c = (m.cpu && typeof m.cpu.percentCPUUsage === 'number') ? m.cpu.percentCPUUsage : 0;
+      totalCpu += c;
+      if (m.type === 'GPU') gpuCpu += c;
+      else if (m.type === 'Tab') rendererCpu += c;
+      if (m.memory && typeof m.memory.workingSetSize === 'number') {
+        totalMemKb += m.memory.workingSetSize;
+      }
+    }
+    const round1 = (v) => Math.round(v * 10) / 10;
+    if (out.appCpuPct == null) out.appCpuPct = round1(Math.min(100, totalCpu / numCpus));
+    out.gpuProcCpuPct = round1(Math.min(100, gpuCpu / numCpus));
+    out.rendererCpuPct = round1(Math.min(100, rendererCpu / numCpus));
+    out.appMemMb = round1(totalMemKb / 1024);
+  } catch {}
+
+  const nodeCpuPct = readNodeSystemCpuPct();
+  if (out.cpuPct == null && nodeCpuPct != null) {
+    out.cpuPct = nodeCpuPct;
+  }
+
+  if (out.memTotalMb == null) {
+    try {
+      const totalMb = os.totalmem() / (1024 * 1024);
+      const usedMb = Math.max(0, os.totalmem() - os.freemem()) / (1024 * 1024);
+      out.memTotalMb = Math.round(totalMb * 10) / 10;
+      out.memUsedMb = Math.round(usedMb * 10) / 10;
+    } catch {}
+  }
+
+  return out;
+}
+
+ipcMain.handle('tauri-invoke', async (event, payload) => {
   const { cmd, args } = payload || {};
   if (!cmd) return null;
+  if (cmd === 'perf_stats') {
+    const rustStats = await sendRpc(cmd, args).catch(() => null);
+    return mergeElectronPerfStats(rustStats && !rustStats.__error ? rustStats : {});
+  }
   return sendRpc(cmd, args);
 });
 
@@ -336,6 +413,10 @@ app.whenReady().then(() => {
   // Prevent display sleep, dimming, and screensaver while Terra is running
   powerBlockerId = powerSaveBlocker.start('prevent-display-sleep');
   console.log('[electron] Activated power save blocker (id:', powerBlockerId, ')');
+
+  // Prime CPU delta baselines for perf_stats
+  try { app.getAppMetrics(); } catch {}
+  readNodeSystemCpuPct();
 
   startRustProcess();
   createWindow();

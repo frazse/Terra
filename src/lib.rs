@@ -1,6 +1,7 @@
 mod addons;
 mod ble;
 mod discord;
+mod perf;
 mod ride;
 pub mod android_data_dir;
 

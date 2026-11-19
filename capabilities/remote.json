@@ -54,6 +54,7 @@
     "allow-discord-set-activity",
     "allow-discord-clear-activity",
     "allow-discord-status",
+    "allow-perf-stats",
     "allow-terra-pick-data-dir",
     "allow-terra-data-dir-status",
     "allow-terra-dismiss-data-dir-prompt",

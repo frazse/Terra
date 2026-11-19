@@ -89,6 +89,11 @@ mod jni {
     }
 }
 
+#[cfg(target_os = "android")]
+pub(crate) fn call_main_activity_str_pub(method: &str) -> Result<String, String> {
+    jni::call_main_activity_str(method)
+}
+
 // ─── Tauri / RPC commands ────────────────────────────────────────────────────
 
 /// Open the Android folder picker. Blocks (async) until the user picks, cancels,

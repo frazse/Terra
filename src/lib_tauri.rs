@@ -61,6 +61,7 @@ pub fn run() {
             crate::discord::discord_set_activity,
             crate::discord::discord_clear_activity,
             crate::discord::discord_status,
+            crate::perf::perf_stats,
             crate::android_data_dir::terra_pick_data_dir,
             crate::android_data_dir::terra_data_dir_status,
             crate::android_data_dir::terra_dismiss_data_dir_prompt,
@@ -91,6 +92,9 @@ pub fn run() {
 
             // Discord Rich Presence client (terra.discord)
             handle.manage(crate::discord::Discord::new());
+
+            // Performance telemetry sampler (terra.perf)
+            handle.manage(crate::perf::PerfState::new());
 
             // Log addon directories and loaded addons
             for dir in crate::addons::addon_dirs(&handle) {

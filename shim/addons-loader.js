@@ -134,6 +134,10 @@
         clear: (clientId) => core.call('discord_clear_activity', { clientId }),
         status: () => core.call('discord_status', {}),
       },
+      // Hardware & process performance stats from the Terra core (CPU/GPU % & temps, RAM, Android thermal).
+      perf: {
+        stats: () => core.call('perf_stats', {}),
+      },
       bus: { on, emit: (topic, data) => bus.emit(topic, data) },
       ble: {
         devices: () => [...core.devices.values()].map((d) => ({ id: d.id, name: d.name, connected: d.gatt.connected })),
