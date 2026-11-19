@@ -1,8 +1,417 @@
-const { app, BrowserWindow, ipcMain, Menu, net, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, net, powerSaveBlocker } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+
+// ---------------------------------------------------------------------------
+// Experimental Frame Generation (lsfg-vk / Lossless Scaling) configuration.
+// Must run before app.whenReady() because Chromium requires XWayland + Vulkan
+// switches (--ozone-platform=x11 --use-gl=angle --use-angle=vulkan) at startup
+// for Vulkan swapchains to be presented through lsfg-vk on Linux Wayland.
+// ---------------------------------------------------------------------------
+const FRAMEGEN_MODES = new Set(['off', '2x', '3x', '4x', 'adaptive60', 'adaptive120']);
+
+function getTerraDataDir() {
+  const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+  return path.join(base, 'terra');
+}
+
+function getFramegenConfigPath() {
+  return path.join(getTerraDataDir(), 'framegen.json');
+}
+
+function getLsfgTomlPath() {
+  return path.join(getTerraDataDir(), 'lsfg-vk.toml');
+}
+
+function detectDefaultDllPath() {
+  if (process.platform !== 'linux') return '';
+  const xdgData = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+  const dirs = [
+    path.join(xdgData, 'Steam', 'steamapps', 'common', 'Lossless Scaling'),
+    path.join(os.homedir(), '.steam', 'steam', 'steamapps', 'common', 'Lossless Scaling'),
+    path.join(os.homedir(), '.var', 'app', 'com.valvesoftware.Steam', '.local', 'share', 'Steam', 'steamapps', 'common', 'Lossless Scaling')
+  ];
+  for (const dir of dirs) {
+    for (const name of ['lsfg-vk.dll', 'Lossless.dll']) {
+      const candidate = path.join(dir, name);
+      try {
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+          return candidate;
+        }
+      } catch {}
+    }
+  }
+  return '';
+}
+
+function detectLsfgLayerInstalled() {
+  if (process.platform !== 'linux') return false;
+  const xdgData = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+  const layerDirs = [
+    '/usr/share/vulkan/implicit_layer.d',
+    '/usr/local/share/vulkan/implicit_layer.d',
+    '/etc/vulkan/implicit_layer.d',
+    path.join(xdgData, 'vulkan', 'implicit_layer.d'),
+    path.join(os.homedir(), '.config', 'vulkan', 'implicit_layer.d')
+  ];
+  for (const dir of layerDirs) {
+    try {
+      const entries = fs.readdirSync(dir);
+      if (entries.some((f) => /lsfg/i.test(f) && f.endsWith('.json'))) {
+        return true;
+      }
+    } catch {}
+  }
+  return fs.existsSync('/usr/lib/liblsfg-vk-layer.so') || fs.existsSync('/usr/lib64/liblsfg-vk-layer.so');
+}
+
+function normalizeFramegenConfig(raw) {
+  const cfg = raw && typeof raw === 'object' ? raw : {};
+  const mode = FRAMEGEN_MODES.has(cfg.mode) ? cfg.mode : 'off';
+  let dllPath = typeof cfg.dllPath === 'string' ? cfg.dllPath.trim() : '';
+  if (!dllPath) dllPath = detectDefaultDllPath();
+  let flowScale = Number(cfg.flowScale);
+  if (!Number.isFinite(flowScale)) flowScale = 85;
+  flowScale = Math.max(0, Math.min(100, Math.round(flowScale)));
+  const performanceMode = Boolean(cfg.performanceMode);
+  const rideOnly = cfg.rideOnly === undefined ? true : Boolean(cfg.rideOnly);
+  return { mode, dllPath, flowScale, performanceMode, rideOnly };
+}
+
+function readFramegenConfig() {
+  const cfgPath = getFramegenConfigPath();
+  try {
+    if (fs.existsSync(cfgPath)) {
+      const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      return normalizeFramegenConfig(parsed);
+    }
+  } catch (e) {
+    console.warn('[electron] Failed to read framegen.json:', e && e.message ? e.message : e);
+  }
+  return normalizeFramegenConfig({});
+}
+
+function isExistingFile(p) {
+  if (!p) return false;
+  try {
+    return fs.existsSync(p) && fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isAdaptiveMode(mode) {
+  return mode === 'adaptive60' || mode === 'adaptive120';
+}
+
+function isFramegenActiveConfig(cfg) {
+  return process.platform === 'linux' && cfg.mode !== 'off' && isExistingFile(cfg.dllPath);
+}
+
+function isRideOrSpectateUrl(rawUrl) {
+  if (!rawUrl) return false;
+  try {
+    const u = new URL(rawUrl);
+    return (u.hostname === 'biketerra.com' || u.hostname.endsWith('.biketerra.com')) &&
+      /^\/(ride|spectate)(\/|$)/.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+let lsfgAdaptiveSupported = null;
+let onRideOrSpectatePage = false;
+let lastWrittenLsfgToml = null;
+
+function detectLsfgAdaptiveSupported() {
+  if (lsfgAdaptiveSupported !== null) return lsfgAdaptiveSupported;
+  if (process.platform !== 'linux') {
+    lsfgAdaptiveSupported = false;
+    return false;
+  }
+  const candidates = [
+    '/usr/lib/liblsfg-vk-layer.so',
+    '/usr/lib64/liblsfg-vk-layer.so',
+    '/usr/local/lib/liblsfg-vk-layer.so'
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const buf = fs.readFileSync(p);
+        lsfgAdaptiveSupported = buf.includes('LSFGVK_ADAPTIVE');
+        return lsfgAdaptiveSupported;
+      }
+    } catch {}
+  }
+  lsfgAdaptiveSupported = false;
+  return false;
+}
+
+function buildLsfgToml(cfg, { forceDisabled = false } = {}) {
+  const clampedPct = Math.max(25, Math.min(100, Math.round(cfg.flowScale)));
+  const flowFloat = (clampedPct / 100).toFixed(2);
+  let multiplier = 2;
+  if (forceDisabled || cfg.mode === 'off') multiplier = 1;
+  else if (cfg.mode === '3x') multiplier = 3;
+  else if (cfg.mode === '4x') multiplier = 4;
+
+  const activeNames = Array.from(new Set([
+    'electron',
+    'terra',
+    'Terra',
+    path.basename(process.execPath),
+    app.getName()
+  ].filter(Boolean)));
+
+  return [
+    'version = 2',
+    '',
+    '[global]',
+    `dll = ${JSON.stringify(cfg.dllPath)}`,
+    '',
+    '[[profile]]',
+    'name = "terra"',
+    `active_in = [${activeNames.map((n) => JSON.stringify(n)).join(', ')}]`,
+    `multiplier = ${multiplier}`,
+    `flow_scale = ${flowFloat}`,
+    `performance_mode = ${cfg.performanceMode ? 'true' : 'false'}`,
+    ''
+  ].join('\n');
+}
+
+function writeLsfgTomlIfChanged(cfg) {
+  if (!isExistingFile(cfg.dllPath)) return;
+  const shouldRunNow = isFramegenActiveConfig(cfg) && (!cfg.rideOnly || onRideOrSpectatePage);
+  const toml = buildLsfgToml(cfg, { forceDisabled: !shouldRunNow });
+  const tomlPath = getLsfgTomlPath();
+  if (lastWrittenLsfgToml === null && fs.existsSync(tomlPath)) {
+    try { lastWrittenLsfgToml = fs.readFileSync(tomlPath, 'utf8'); } catch {}
+  }
+  if (toml !== lastWrittenLsfgToml) {
+    fs.writeFileSync(tomlPath, toml, 'utf8');
+    lastWrittenLsfgToml = toml;
+  }
+}
+
+function writeFramegenFiles(cfg) {
+  const dataDir = getTerraDataDir();
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(getFramegenConfigPath(), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  writeLsfgTomlIfChanged(cfg);
+}
+
+const bootFramegenConfig = readFramegenConfig();
+const bootFramegenActive = isFramegenActiveConfig(bootFramegenConfig);
+const bootFramegenAdaptive = bootFramegenActive && isAdaptiveMode(bootFramegenConfig.mode) && detectLsfgAdaptiveSupported();
+let liveFramegenConfig = bootFramegenActive ? Object.assign({}, bootFramegenConfig) : null;
+let earlyRelaunching = false;
+
+function syncFramegenForUrl(rawUrl) {
+  const nextOnRide = isRideOrSpectateUrl(rawUrl);
+  if (nextOnRide === onRideOrSpectatePage) return;
+  onRideOrSpectatePage = nextOnRide;
+  if (!bootFramegenActive || bootFramegenAdaptive) return;
+  const activeCfg = liveFramegenConfig || bootFramegenConfig;
+  if (!activeCfg || !activeCfg.rideOnly || !isExistingFile(activeCfg.dllPath)) return;
+  const prevToml = lastWrittenLsfgToml;
+  try {
+    writeLsfgTomlIfChanged(activeCfg);
+    if (lastWrittenLsfgToml !== prevToml) {
+      const activeNow = isFramegenActiveConfig(activeCfg) && (!activeCfg.rideOnly || onRideOrSpectatePage);
+      console.log(`[electron] Framegen ${activeNow ? `enabled (${activeCfg.mode})` : 'paused (non-ride page)'} for ${rawUrl}`);
+    }
+  } catch (e) {
+    console.warn('[electron] Failed to update lsfg-vk.toml for navigation:', e && e.message ? e.message : e);
+  }
+}
+
+function getLiveFramegenStats() {
+  const cfg = liveFramegenConfig;
+  if (!bootFramegenActive || !cfg || !isFramegenActiveConfig(cfg)) {
+    return { active: false };
+  }
+  if (!bootFramegenAdaptive && cfg.rideOnly && !onRideOrSpectatePage) {
+    return { active: false, armed: true, rideOnly: true };
+  }
+  const mode = cfg.mode;
+  const adaptiveMode = isAdaptiveMode(mode);
+  const adaptiveSupported = adaptiveMode ? detectLsfgAdaptiveSupported() : false;
+  let multiplier = 2;
+  if (mode === '3x') multiplier = 3;
+  else if (mode === '4x') multiplier = 4;
+  return {
+    active: true,
+    mode,
+    multiplier,
+    adaptive: adaptiveMode && adaptiveSupported,
+    targetFps: adaptiveMode ? (mode === 'adaptive120' ? 120 : 60) : null,
+    maxMultiplier: 4,
+    flowScale: cfg.flowScale
+  };
+}
+
+function buildRelaunchArgs(enableX11Vulkan) {
+  const x11Flags = ['--ozone-platform=x11', '--use-gl=angle', '--use-angle=vulkan'];
+  const filtered = process.argv.slice(1).filter((arg, idx, arr) => {
+    if (x11Flags.includes(arg)) return false;
+    if (enableX11Vulkan && (arg.startsWith('--ozone-platform=') || arg.startsWith('--use-gl=') || arg.startsWith('--use-angle='))) return false;
+    if (arg === '--ozone-platform' || arg === '--use-gl' || arg === '--use-angle') return false;
+    if (idx > 0 && (arr[idx - 1] === '--ozone-platform' || arr[idx - 1] === '--use-gl' || arr[idx - 1] === '--use-angle')) return false;
+    return true;
+  });
+  return enableX11Vulkan ? filtered.concat(x11Flags) : filtered;
+}
+
+function hasX11OzoneArg() {
+  if (process.argv.includes('--ozone-platform=x11')) return true;
+  const idx = process.argv.indexOf('--ozone-platform');
+  return idx !== -1 && process.argv[idx + 1] === 'x11';
+}
+
+function applyFramegenEnv(cfg) {
+  const active = isFramegenActiveConfig(cfg);
+  const adaptiveEnv = active && isAdaptiveMode(cfg.mode) && detectLsfgAdaptiveSupported();
+  if (active) {
+    delete process.env.DISABLE_LSFGVK;
+    process.env.LSFGVK_CONFIG = getLsfgTomlPath();
+    if (adaptiveEnv) {
+      const clampedPct = Math.max(25, Math.min(100, Math.round(cfg.flowScale)));
+      const flowFloat = (clampedPct / 100).toFixed(2);
+      delete process.env.LSFGVK_PROFILE;
+      process.env.LSFGVK_ENV = '1';
+      process.env.LSFGVK_DLL_PATH = cfg.dllPath;
+      process.env.LSFGVK_ADAPTIVE = '1';
+      process.env.LSFGVK_TARGET_FPS = cfg.mode === 'adaptive120' ? '120' : '60';
+      process.env.LSFGVK_ADAPTIVE_MAX_MULTIPLIER = '4';
+      process.env.LSFGVK_MULTIPLIER = '2';
+      process.env.LSFGVK_FLOW_SCALE = flowFloat;
+      process.env.LSFGVK_PERFORMANCE_MODE = cfg.performanceMode ? '1' : '0';
+    } else {
+      delete process.env.LSFGVK_ENV;
+      delete process.env.LSFGVK_DLL_PATH;
+      delete process.env.LSFGVK_ADAPTIVE;
+      delete process.env.LSFGVK_TARGET_FPS;
+      delete process.env.LSFGVK_ADAPTIVE_MAX_MULTIPLIER;
+      delete process.env.LSFGVK_MULTIPLIER;
+      delete process.env.LSFGVK_FLOW_SCALE;
+      delete process.env.LSFGVK_PERFORMANCE_MODE;
+      process.env.LSFGVK_PROFILE = 'terra';
+    }
+    process.env.TERRA_LSFG_READY = '1';
+  } else {
+    process.env.DISABLE_LSFGVK = '1';
+    delete process.env.LSFGVK_CONFIG;
+    delete process.env.LSFGVK_PROFILE;
+    delete process.env.LSFGVK_ENV;
+    delete process.env.LSFGVK_DLL_PATH;
+    delete process.env.LSFGVK_ADAPTIVE;
+    delete process.env.LSFGVK_TARGET_FPS;
+    delete process.env.LSFGVK_ADAPTIVE_MAX_MULTIPLIER;
+    delete process.env.LSFGVK_MULTIPLIER;
+    delete process.env.LSFGVK_FLOW_SCALE;
+    delete process.env.LSFGVK_PERFORMANCE_MODE;
+    delete process.env.TERRA_LSFG_READY;
+  }
+}
+
+function getRelaunchTargetAndArgs(enableX11Vulkan) {
+  const execTarget = process.env.APPIMAGE || process.execPath;
+  const args = process.env.APPIMAGE
+    ? buildRelaunchArgs(enableX11Vulkan).filter((a) => !a.startsWith('--appimage'))
+    : buildRelaunchArgs(enableX11Vulkan);
+  return { execTarget, args };
+}
+
+function relaunchWithEnv(enableX11Vulkan) {
+  const { execTarget, args } = getRelaunchTargetAndArgs(enableX11Vulkan);
+  const child = spawn(execTarget, args, {
+    env: process.env,
+    detached: true,
+    stdio: 'ignore'
+  });
+  child.unref();
+  app.exit(0);
+}
+
+function relaunchForeground(enableX11Vulkan) {
+  const { execTarget, args } = getRelaunchTargetAndArgs(enableX11Vulkan);
+  const child = spawn(execTarget, args, {
+    env: process.env,
+    detached: false,
+    stdio: 'inherit'
+  });
+  const forwardSig = (sig) => {
+    try {
+      if (!child.killed) child.kill(sig);
+    } catch {}
+  };
+  process.on('SIGINT', () => forwardSig('SIGINT'));
+  process.on('SIGTERM', () => forwardSig('SIGTERM'));
+  child.on('exit', (code, signal) => {
+    app.exit(code != null ? code : (signal ? 1 : 0));
+  });
+  child.on('error', (err) => {
+    console.error('[electron] Foreground relaunch failed:', err);
+    app.exit(1);
+  });
+}
+
+if (process.platform === 'linux') {
+  if (bootFramegenActive) {
+    try {
+      writeFramegenFiles(bootFramegenConfig);
+    } catch (e) {
+      console.warn('[electron] Failed to write lsfg-vk config at boot:', e && e.message ? e.message : e);
+    }
+    const needRelaunch = !hasX11OzoneArg() ||
+      (!process.env.TERRA_LSFG_READY && !process.env.LSFGVK_CONFIG);
+    applyFramegenEnv(bootFramegenConfig);
+    if (needRelaunch && !process.env.TERRA_X11_RELAUNCHED) {
+      earlyRelaunching = true;
+      process.env.TERRA_X11_RELAUNCHED = '1';
+      console.log('[electron] Relaunching under XWayland + Vulkan with lsfg-vk env...');
+      relaunchForeground(true);
+    }
+  } else {
+    applyFramegenEnv(bootFramegenConfig);
+  }
+}
+
+function computeFramegenRestartRequired(curCfg) {
+  const nextActive = isFramegenActiveConfig(curCfg);
+  if (nextActive !== bootFramegenActive) return true;
+  if (!bootFramegenActive) return false;
+  const nextAdaptive = isAdaptiveMode(curCfg.mode) && detectLsfgAdaptiveSupported();
+  if (nextAdaptive !== bootFramegenAdaptive) return true;
+  if (curCfg.dllPath !== bootFramegenConfig.dllPath) return true;
+  if (bootFramegenAdaptive) {
+    return (
+      curCfg.mode !== bootFramegenConfig.mode ||
+      curCfg.flowScale !== bootFramegenConfig.flowScale ||
+      curCfg.performanceMode !== bootFramegenConfig.performanceMode
+    );
+  }
+  return false;
+}
+
+function getFramegenStatus(overrideCfg) {
+  const config = overrideCfg || readFramegenConfig();
+  const live = getLiveFramegenStats();
+  return {
+    supported: process.platform === 'linux',
+    layerInstalled: detectLsfgLayerInstalled(),
+    dllExists: isExistingFile(config.dllPath),
+    bootActive: bootFramegenActive,
+    activeNow: Boolean(live.active),
+    onRidePage: onRideOrSpectatePage,
+    restartRequired: computeFramegenRestartRequired(config),
+    configPath: getFramegenConfigPath(),
+    tomlPath: getLsfgTomlPath(),
+    config
+  };
+}
 
 // Enable Chromium GPU hardware acceleration and GPU rasterization for WebGL
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
@@ -13,15 +422,25 @@ app.commandLine.appendSwitch('enable-zero-copy');
 // default ANGLE path renders with artifacts). Equivalent to enabling the
 // chrome://flags entries #enable-vulkan, #default-angle-vulkan and
 // #vulkan-from-angle at app startup.
+// When Frame Generation (lsfg-vk) is enabled, also switch to XWayland + ANGLE
+// Vulkan so Chromium presents via a Vulkan swapchain that lsfg-vk can hook.
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch(
     'enable-features',
     'Vulkan,DefaultANGLEVulkan,VulkanFromANGLE'
   );
+  if (bootFramegenActive) {
+    app.commandLine.appendSwitch('ozone-platform', 'x11');
+    app.commandLine.appendSwitch('use-gl', 'angle');
+    app.commandLine.appendSwitch('use-angle', 'vulkan');
+    console.log('[electron] Frame generation enabled at boot:', bootFramegenConfig.mode, 'dll:', bootFramegenConfig.dllPath);
+  }
 }
 
 let mainWindow;
 let rustProcess;
+let isQuitting = false;
+let shutdownPromise = null;
 let reqId = 1;
 let powerBlockerId = null;
 const pendingRpc = new Map();
@@ -53,7 +472,9 @@ function startRustProcess() {
   }
 
   console.log('[electron] Spawning real Rust BLE & Addons backend:', binaryPath);
-  rustProcess = spawn(binaryPath, ['--rpc']);
+  rustProcess = spawn(binaryPath, ['--rpc'], {
+    detached: process.platform !== 'win32'
+  });
 
   let lineBuffer = '';
   rustProcess.stdout.on('data', (data) => {
@@ -89,17 +510,19 @@ function startRustProcess() {
   });
 
   rustProcess.on('exit', (code, signal) => {
-    console.error(`[electron] Rust process exited with code ${code}, signal ${signal}. Restarting...`);
+    console.error(`[electron] Rust process exited with code ${code}, signal ${signal}.`);
     rustProcess = null;
     for (const [id, entry] of pendingRpc) {
       pendingRpc.delete(id);
       entry.reject(new Error(`Rust backend exited (code ${code}, signal ${signal})`));
     }
-    setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        startRustProcess();
-      }
-    }, 1000);
+    if (!isQuitting) {
+      setTimeout(() => {
+        if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
+          startRustProcess();
+        }
+      }, 1000);
+    }
   });
 
   rustProcess.on('error', (err) => {
@@ -213,6 +636,8 @@ function mergeElectronPerfStats(rustStats) {
     } catch {}
   }
 
+  out.framegen = getLiveFramegenStats();
+
   return out;
 }
 
@@ -222,6 +647,74 @@ ipcMain.handle('tauri-invoke', async (event, payload) => {
   if (cmd === 'perf_stats') {
     const rustStats = await sendRpc(cmd, args).catch(() => null);
     return mergeElectronPerfStats(rustStats && !rustStats.__error ? rustStats : {});
+  }
+  if (cmd === 'framegen_get') {
+    return getFramegenStatus();
+  }
+  if (cmd === 'framegen_set') {
+    const prev = readFramegenConfig();
+    const next = normalizeFramegenConfig({
+      mode: args && args.mode !== undefined ? args.mode : prev.mode,
+      dllPath: args && args.dllPath !== undefined ? args.dllPath : prev.dllPath,
+      flowScale: args && args.flowScale !== undefined ? args.flowScale : prev.flowScale,
+      performanceMode: args && args.performanceMode !== undefined ? args.performanceMode : prev.performanceMode,
+      rideOnly: args && args.rideOnly !== undefined ? args.rideOnly : prev.rideOnly
+    });
+    try {
+      writeFramegenFiles(next);
+    } catch (e) {
+      return { __error: e && e.message ? e.message : String(e) };
+    }
+    const nextAdaptiveEnv = isAdaptiveMode(next.mode) && detectLsfgAdaptiveSupported();
+    if (
+      bootFramegenActive &&
+      !bootFramegenAdaptive &&
+      !nextAdaptiveEnv &&
+      next.dllPath === bootFramegenConfig.dllPath
+    ) {
+      liveFramegenConfig = Object.assign({}, next);
+    }
+    return getFramegenStatus(next);
+  }
+  if (cmd === 'framegen_pick_dll') {
+    if (process.platform !== 'linux') {
+      return { __error: 'Frame generation is only supported on Linux' };
+    }
+    const cur = readFramegenConfig();
+    let defaultPath = cur.dllPath || detectDefaultDllPath();
+    if (defaultPath && fs.existsSync(defaultPath)) {
+      defaultPath = path.dirname(defaultPath);
+    } else {
+      defaultPath = os.homedir();
+    }
+    const res = await dialog.showOpenDialog(mainWindow || undefined, {
+      title: 'Select Lossless Scaling DLL (Lossless.dll or lsfg-vk.dll)',
+      defaultPath,
+      properties: ['openFile'],
+      filters: [
+        { name: 'Lossless Scaling DLL', extensions: ['dll'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+    if (res.canceled || !res.filePaths || !res.filePaths.length) {
+      return Object.assign({ cancelled: true }, getFramegenStatus(cur));
+    }
+    const next = normalizeFramegenConfig(Object.assign({}, cur, { dllPath: res.filePaths[0] }));
+    try {
+      writeFramegenFiles(next);
+    } catch (e) {
+      return { __error: e && e.message ? e.message : String(e) };
+    }
+    return Object.assign({ cancelled: false }, getFramegenStatus(next));
+  }
+  if (cmd === 'framegen_relaunch') {
+    await gracefulShutdownRust({ dispatchPagehide: true });
+    const nextCfg = readFramegenConfig();
+    const nextActive = isFramegenActiveConfig(nextCfg);
+    delete process.env.TERRA_X11_RELAUNCHED;
+    applyFramegenEnv(nextCfg);
+    relaunchWithEnv(nextActive);
+    return { relaunching: true };
   }
   return sendRpc(cmd, args);
 });
@@ -284,7 +777,9 @@ async function btappFindChunk(wc) {
 // Wait for the condition to fire (next game tick) and confirm `window.btApp`.
 async function btappVerify(wc) {
   for (let i = 0; i < 40; i++) {
+    if (isQuitting || wc.isDestroyed()) return;
     await new Promise((r) => setTimeout(r, 500));
+    if (isQuitting || wc.isDestroyed()) return;
     let ok = false;
     try {
       ok = await wc.executeJavaScript('!!window.btApp', false);
@@ -398,18 +893,84 @@ function createWindow() {
       btappEnsure(mainWindow.webContents).catch((e) => console.warn('[electron] auto-breakpoint:', e));
     }
   };
+  const onNav = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    syncFramegenForUrl(mainWindow.webContents.getURL());
+    arm();
+  };
   // Full loads AND SPA navigations: the game chunk is lazy, and only loads
   // once a user enters a ride. An in-flight scan loop re-reads the live chunk
   // list, so it picks the chunk up whenever it appears.
-  mainWindow.webContents.on('did-finish-load', arm);
-  mainWindow.webContents.on('did-navigate-in-page', arm);
+  mainWindow.webContents.on('did-navigate', onNav);
+  mainWindow.webContents.on('did-finish-load', onNav);
+  mainWindow.webContents.on('did-navigate-in-page', onNav);
+
+  mainWindow.on('close', (event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      event.preventDefault();
+      const win = mainWindow;
+      gracefulShutdownRust({ dispatchPagehide: true }).finally(() => {
+        if (win && !win.isDestroyed()) {
+          win.destroy();
+        }
+      });
+    }
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
+function gracefulShutdownRust({ dispatchPagehide = false } = {}) {
+  isQuitting = true;
+  if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
+    powerSaveBlocker.stop(powerBlockerId);
+  }
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    try {
+      if (btapp.attached && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.debugger.detach();
+      }
+    } catch {}
+    if (dispatchPagehide && mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        await Promise.race([
+          mainWindow.webContents.executeJavaScript("window.dispatchEvent(new Event('pagehide'))", false),
+          new Promise((r) => setTimeout(r, 300))
+        ]);
+      } catch {}
+    }
+    if (rustProcess) {
+      // Give in-flight pagehide addon teardown (e.g. Kickr WFTNP 0x2AD9 [01]
+      // control release + addon_tcp_close's 250ms writer drain & FIN) time to
+      // flush before killing the Rust backend, while disconnecting BLE devices.
+      const tcpDrainGrace = new Promise((r) => setTimeout(r, 450));
+      const bleDisconnect = (async () => {
+        try {
+          const r = await Promise.race([
+            sendRpc('ble_disconnect_all', {}),
+            new Promise((r) => setTimeout(() => r({ __timeout: true }), 2000))
+          ]);
+          if (r && r.__error) console.error('[electron] ble_disconnect_all failed:', r.__error);
+        } catch (e) {
+          console.error('[electron] ble_disconnect_all failed:', e);
+        }
+      })();
+      await Promise.all([bleDisconnect, tcpDrainGrace]);
+      if (rustProcess) {
+        try { rustProcess.stdin.end(); } catch {}
+        try { rustProcess.kill(); } catch {}
+        rustProcess = null;
+      }
+    }
+  })();
+  return shutdownPromise;
+}
+
 app.whenReady().then(() => {
+  if (earlyRelaunching) return;
   // Prevent display sleep, dimming, and screensaver while Terra is running
   powerBlockerId = powerSaveBlocker.start('prevent-display-sleep');
   console.log('[electron] Activated power save blocker (id:', powerBlockerId, ')');
@@ -421,6 +982,14 @@ app.whenReady().then(() => {
   startRustProcess();
   createWindow();
 
+  const handleTermSignal = () => {
+    gracefulShutdownRust({ dispatchPagehide: true }).finally(() => {
+      app.exit(0);
+    });
+  };
+  process.on('SIGINT', handleTermSignal);
+  process.on('SIGTERM', handleTermSignal);
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -429,21 +998,10 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', async () => {
-  if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
-    powerSaveBlocker.stop(powerBlockerId);
-  }
-  if (rustProcess) {
-    // Tear down all BLE connections inside the Rust process before killing it,
-    // so devices don't stay connected to the host. Bounded by the 30s RPC timeout.
-    try {
-      const r = await sendRpc('ble_disconnect_all', {});
-      if (r && r.__error) console.error('[electron] ble_disconnect_all failed:', r.__error);
-    } catch (e) {
-      console.error('[electron] ble_disconnect_all failed:', e);
-    }
-    rustProcess.kill();
-  }
+  if (earlyRelaunching) return;
+  await gracefulShutdownRust({ dispatchPagehide: false });
   if (process.platform !== 'darwin') {
     app.quit();
+    setTimeout(() => app.exit(0), 1500).unref();
   }
 });

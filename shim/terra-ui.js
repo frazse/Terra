@@ -118,6 +118,18 @@
 .terra-setup-foot { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; padding: 12px 20px 16px; border-top: 1px solid #25252d; }
 .terra-btn-danger { background: #3a1a1a; border: 1px solid #6b2020; color: #e06060; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
 .terra-btn-danger:hover { background: #4a2020; }
+.terra-fg-body { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; max-height: 240px; overflow: auto; padding-right: 2px; }
+.terra-fg-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: #b5b5c3; }
+.terra-fg-row { display: flex; gap: 8px; align-items: center; }
+.terra-fg-row .terra-input { flex: 1; min-width: 0; }
+.terra-fg-range-row { display: flex; align-items: center; gap: 10px; }
+.terra-fg-range { flex: 1; accent-color: #ff6b57; cursor: pointer; }
+.terra-fg-val { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: #eee; font-size: 12px; }
+.terra-fg-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #ddd; cursor: pointer; }
+.terra-fg-check input { width: auto; accent-color: #ff6b57; cursor: pointer; }
+.terra-fg-restart { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 7px; background: #2d1e14; border: 1px solid #6b4423; color: #fbd38d; font-size: 12px; }
+.terra-fg-warn { color: #f6ad55; font-size: 11px; }
+.terra-fg-ok { color: #7ddc8a; font-size: 11px; }
 canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
   will-change: transform;
   transform: translateZ(0);
@@ -665,6 +677,14 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
       h('div', { class: 'terra-ble-list' }, 'Loading\u2026'));
     bleBox.addEventListener('toggle', () => { if (bleBox.open) renderBlePanel(); });
 
+    // Frame Generation section (Linux Electron desktop only; shown if host supports framegen_get)
+    const fgSummaryBadge = h('span', { class: 'terra-ver' }, '');
+    const fgBody = h('div', { class: 'terra-fg-body' });
+    const fgBox = h('details', { class: 'terra-ble terra-fg', hidden: '' },
+      h('summary', {},
+        h('span', {}, 'Frame Generation (Experimental) ', fgSummaryBadge)),
+      fgBody);
+
     // Data folder section
     const ddSection = h('div', { class: 'terra-datadir' }, h('strong', {}, 'Data folder'));
     foot = h('div', { class: 'terra-foot' },
@@ -689,6 +709,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
       catalogBox,
       body,
       bleBox,
+      fgBox,
       foot);
 
     // Drag & drop .zip directly onto the modal
@@ -705,6 +726,180 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     document.body.append(overlay);
 
     renderBlePanel();
+
+    // Populate Frame Generation panel on Linux Electron desktop
+    if (!navigator.userAgent.includes('Android')) {
+      (async () => {
+        const modeLabels = {
+          off: 'Off',
+          '2x': '2x (Fixed)',
+          '3x': '3x (Fixed)',
+          '4x': '4x (Fixed)',
+          adaptive60: 'Adaptive 60 FPS',
+          adaptive120: 'Adaptive 120 FPS',
+        };
+        const shortModeLabels = {
+          off: 'Off',
+          '2x': '2x',
+          '3x': '3x',
+          '4x': '4x',
+          adaptive60: 'Adaptive 60',
+          adaptive120: 'Adaptive 120',
+        };
+
+        const renderFramegen = (st) => {
+          if (!st || !st.supported) return;
+          fgBox.hidden = false;
+          const cfg = st.config || { mode: 'off', dllPath: '', flowScale: 85, performanceMode: false, rideOnly: true };
+          const summaryParts = [shortModeLabels[cfg.mode] || cfg.mode];
+          if (cfg.mode !== 'off') summaryParts.push(`${cfg.flowScale}%`);
+          if (st.restartRequired) summaryParts.push('restart required');
+          fgSummaryBadge.textContent = summaryParts.join(' \u00b7 ');
+
+          const saveFeedback = h('span', { class: 'terra-status' });
+          const saveFg = async (patch) => {
+            try {
+              const next = await core.call('framegen_set', patch);
+              core.bus.emit('terra:framegen-changed', next);
+              renderFramegen(next);
+              const fb = fgBody.querySelector('.terra-fg-saved');
+              if (fb) {
+                fb.textContent = 'saved';
+                setTimeout(() => { fb.textContent = ''; }, 2000);
+              }
+            } catch (e) {
+              showBanner('Frame generation save failed: ' + e, 'err');
+            }
+          };
+
+          const dllInput = h('input', {
+            class: 'terra-input',
+            type: 'text',
+            value: cfg.dllPath || '',
+            placeholder: '/path/to/Lossless.dll or lsfg-vk.dll',
+            autocomplete: 'off',
+            spellcheck: 'false',
+          });
+          dllInput.addEventListener('change', () => saveFg({ dllPath: dllInput.value.trim() }));
+
+          const pickDllBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'Browse\u2026');
+          pickDllBtn.addEventListener('click', async () => {
+            pickDllBtn.disabled = true;
+            try {
+              const res = await core.call('framegen_pick_dll', {});
+              if (res && !res.cancelled) {
+                core.bus.emit('terra:framegen-changed', res);
+                renderFramegen(res);
+              }
+            } catch (e) {
+              showBanner('DLL picker failed: ' + e, 'err');
+            }
+            pickDllBtn.disabled = false;
+          });
+
+          const modeSelect = h('select', { class: 'terra-input' });
+          for (const [val, label] of Object.entries(modeLabels)) {
+            modeSelect.append(h('option', { value: val }, label));
+          }
+          modeSelect.value = cfg.mode;
+          modeSelect.addEventListener('change', () => saveFg({ mode: modeSelect.value }));
+
+          const flowValEl = h('span', { class: 'terra-fg-val' }, `${cfg.flowScale}%`);
+          const flowSlider = h('input', {
+            class: 'terra-fg-range',
+            type: 'range',
+            min: '0',
+            max: '100',
+            step: '5',
+          });
+          flowSlider.value = String(cfg.flowScale);
+          flowSlider.addEventListener('input', () => {
+            flowValEl.textContent = `${flowSlider.value}%`;
+          });
+          flowSlider.addEventListener('change', () => saveFg({ flowScale: Number(flowSlider.value) }));
+
+          const perfCheckbox = h('input', { type: 'checkbox' });
+          perfCheckbox.checked = !!cfg.performanceMode;
+          perfCheckbox.addEventListener('change', () => saveFg({ performanceMode: perfCheckbox.checked }));
+
+          const rideOnlyCheckbox = h('input', { type: 'checkbox' });
+          rideOnlyCheckbox.checked = cfg.rideOnly !== false;
+          rideOnlyCheckbox.addEventListener('change', () => saveFg({ rideOnly: rideOnlyCheckbox.checked }));
+
+          const restartBtn = h('button', { class: 'terra-btn-primary terra-btn-sm', type: 'button' }, 'Restart Terra');
+          restartBtn.addEventListener('click', async () => {
+            restartBtn.disabled = true;
+            restartBtn.textContent = 'Restarting\u2026';
+            try {
+              await core.call('framegen_relaunch', {});
+            } catch (e) {
+              showBanner('Restart failed: ' + e, 'err');
+              restartBtn.disabled = false;
+              restartBtn.textContent = 'Restart Terra';
+            }
+          });
+
+          const dllStatusEl = !cfg.dllPath
+            ? h('div', { class: 'terra-fg-warn' }, 'No Lossless.dll / lsfg-vk.dll selected yet.')
+            : !st.dllExists
+              ? h('div', { class: 'terra-fg-warn' }, 'DLL file not found at this path.')
+              : '';
+
+          saveFeedback.classList.add('terra-fg-saved');
+
+          const statusText = st.activeNow
+            ? 'Frame gen active on this page'
+            : st.bootActive
+              ? (cfg.mode !== 'off' && cfg.rideOnly !== false && !st.onRidePage
+                  ? 'Frame gen armed (active on /ride & /spectate)'
+                  : 'Frame gen paused this session')
+              : 'Frame gen inactive this session';
+
+          fgBody.replaceChildren(
+            h('div', { class: 'terra-fg-status' },
+              h('span', { class: 'terra-dot' + (st.bootActive && cfg.mode !== 'off' ? ' on' : '') }),
+              h('span', {}, statusText),
+              h('span', {}, '\u00b7'),
+              h('span', { class: st.layerInstalled ? 'terra-fg-ok' : 'terra-fg-warn' },
+                st.layerInstalled ? 'lsfg-vk layer detected' : 'lsfg-vk layer not detected'),
+              saveFeedback),
+            st.restartRequired
+              ? h('div', { class: 'terra-fg-restart' },
+                  h('span', {}, 'Restart Terra to apply frame generation / display changes.'),
+                  restartBtn)
+              : '',
+            h('div', { class: 'terra-field', style: 'margin-top:0' },
+              h('label', {}, 'Lossless Scaling DLL (Lossless.dll / lsfg-vk.dll)'),
+              h('div', { class: 'terra-fg-row' }, dllInput, pickDllBtn),
+              dllStatusEl),
+            h('div', { class: 'terra-field', style: 'margin-top:0' },
+              h('label', {}, 'Mode'),
+              modeSelect,
+              h('div', { class: 'terra-help' },
+                '2x / 3x / 4x run via lsfg-vk 2.0 on XWayland + Vulkan. Adaptive 60 / 120 sets experimental LSFGVK_ADAPTIVE env vars (falls back to 2x on standard lsfg-vk 2.0).')),
+            h('div', { class: 'terra-field', style: 'margin-top:0' },
+              h('label', {}, 'Flow scale'),
+              h('div', { class: 'terra-fg-range-row' }, flowSlider, flowValEl),
+              h('div', { class: 'terra-help' },
+                '0\u2013100% motion estimation scale. lsfg-vk enforces a 25% minimum (values below 25% clamp to 25%).')),
+            h('label', { class: 'terra-fg-check' },
+              perfCheckbox,
+              h('span', {}, 'Performance mode (faster, slightly lower quality)')),
+            h('label', { class: 'terra-fg-check' },
+              rideOnlyCheckbox,
+              h('span', {}, 'Only active on ride & spectate pages'))
+          );
+        };
+
+        try {
+          const st = await core.call('framegen_get', {});
+          renderFramegen(st);
+          if (st && st.restartRequired) fgBox.open = true;
+        } catch {
+          /* Non-Electron hosts (Tauri / Android) do not implement framegen_get */
+        }
+      })();
+    }
 
     // Populate the data folder section asynchronously
     (async () => {
