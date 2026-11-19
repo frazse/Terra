@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.2] — Fix Addon Bluetooth Chooser With Wi-Fi Trainer Bridge
+
+### Fixed
+- **Zwift Ride Pair controller blocked by Wi-Fi Trainer Bridge** — routed `terra.ble.request()` directly through `__terraCore.requestDevice` so page-level `navigator.bluetooth.requestDevice` wrappers cannot hijack addon pairing requests, and updated bundled `wifi-trainer-bridge` to `v2.0.3` to pass through `__terraOwner` requests.
+
 ## [0.11.1] — GitHub Catalog Redesign, Per-Addon Changelogs & Terra Settings UI
 
 ### Added
