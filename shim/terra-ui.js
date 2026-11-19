@@ -17,7 +17,7 @@
 .terra-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .terra-x { background: none; border: 0; color: #999; font-size: 24px; line-height: 1; cursor: pointer; padding: 0 4px; }
 .terra-x:hover { color: #fff; }
-.terra-toolbar { padding: 10px 20px; border-bottom: 1px solid #25252d; display: flex; flex-direction: column; gap: 8px; background: #191920; }
+.terra-toolbar { padding: 0 0 8px; border-bottom: 1px solid #262632; display: flex; flex-direction: column; gap: 8px; flex: none; }
 .terra-search-row { display: flex; gap: 8px; align-items: center; }
 .terra-search { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 7px; font: inherit; font-size: 13px;
   background: #23232c !important; color: #eee !important; border: 1px solid #343440 !important; }
@@ -43,13 +43,17 @@
 .terra-cat-cl-ver:first-child { margin-top: 0; }
 .terra-cat-cl-list { margin: 2px 0 0 15px; padding: 0; }
 .terra-cat-cl-list li { margin: 1px 0; line-height: 1.35; }
+.terra-modal.terra-mode-catalog .terra-main,
 .terra-modal.terra-mode-catalog .terra-body,
+.terra-modal.terra-mode-catalog .terra-panels,
 .terra-modal.terra-mode-catalog .terra-ble,
 .terra-modal.terra-mode-catalog .terra-foot { display: none; }
+.terra-modal.terra-mode-catalog .terra-toolbar { padding: 10px 20px; border-bottom: 1px solid #25252d; background: #191920; }
 .terra-modal.terra-mode-catalog .terra-catalog { display: flex; flex-direction: column; flex: 1; min-height: 120px; max-height: none; border-bottom: 0; padding: 0; overflow: hidden; }
 .terra-modal.terra-mode-catalog .terra-catalog-head { padding: 10px 20px; margin-bottom: 0; border-bottom: 1px solid #25252d; background: #14141a; flex: none; }
 .terra-modal.terra-mode-catalog .terra-catalog-list { padding: 4px 20px 14px; }
-.terra-body { padding: 4px 20px; overflow: auto; flex: 1; min-height: 120px; }
+.terra-main { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; background: #101015; flex: 1; min-height: 0; overflow: hidden; }
+.terra-body { padding: 2px 2px 0 0; overflow: auto; flex: 1; min-height: 60px; }
 .terra-item { border-bottom: 1px solid #25252d; }
 .terra-item:last-child { border-bottom: 0; }
 .terra-row { display: flex; gap: 14px; align-items: center; padding: 13px 0; }
@@ -91,10 +95,29 @@
 .terra-switch input:checked + span { background: #ff6b57; }
 .terra-switch input:checked + span::after { transform: translateX(20px); }
 .terra-switch input:focus-visible + span { outline: 2px solid #fff; outline-offset: 2px; }
-.terra-ble { padding: 10px 20px; border-top: 1px solid #25252d; font-size: 12px; color: #bbb; background: #131318; }
-.terra-ble summary { cursor: pointer; font-weight: 600; color: #ddd; display: flex; align-items: center; justify-content: space-between; list-style: none; }
+.terra-panels { display: flex; flex-direction: column; gap: 6px; flex: none; max-height: 40vh; overflow: auto; }
+.terra-ble { padding: 8px 12px; border: 1px solid #262632; border-radius: 8px; font-size: 12px; color: #bbb; background: #17171f; transition: border-color .15s, background .15s; }
+.terra-ble[open], .terra-addons.open { border-color: #3a3a4a; background: #1a1a24; }
+.terra-addons { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.terra-addons.open { flex: 1; min-height: 140px; }
+.terra-addons:not(.open) { flex: none; }
+.terra-addons:not(.open) + .terra-panels { flex: 1; max-height: none; min-height: 0; }
+.terra-addons-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: none; }
+.terra-addons-toggle { flex: 1; min-width: 0; background: none; border: 0; padding: 0; font: inherit; font-weight: 600; color: #ddd; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 7px; user-select: none; }
+.terra-addons-toggle:hover { color: #fff; }
+.terra-addons-head-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.terra-addons-content { display: flex; flex-direction: column; flex: 1; min-height: 0; margin-top: 8px; padding-top: 8px; border-top: 1px solid #262632; }
+.terra-addons:not(.open) .terra-addons-content { display: none; }
+.terra-ble summary { cursor: pointer; font-weight: 600; color: #ddd; display: flex; align-items: center; justify-content: space-between; gap: 8px; list-style: none; user-select: none; }
+.terra-ble summary:hover { color: #fff; }
 .terra-ble summary::-webkit-details-marker { display: none; }
-.terra-ble-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow: auto; }
+.terra-panel-title { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; }
+.terra-panel-label { flex: none; }
+.terra-caret { display: inline-flex; align-items: center; justify-content: center; width: 12px; font-size: 11px; color: #8c92a4; transition: transform .15s ease, color .15s ease; flex: none; }
+.terra-ble[open] > summary .terra-caret,
+.terra-addons.open .terra-addons-toggle .terra-caret { transform: rotate(90deg); color: #ff6b57; }
+.terra-dd-summary-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; font-size: 11px; min-width: 0; }
+.terra-ble-list { margin-top: 8px; padding-top: 8px; border-top: 1px solid #262632; display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow: auto; }
 .terra-ble-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 7px; background: #1c1c24; }
 .terra-ble-meta { min-width: 0; flex: 1; }
 .terra-ble-name { font-weight: 600; color: #eee; display: flex; align-items: center; gap: 6px; }
@@ -119,9 +142,9 @@
   display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: .55; transition: opacity .15s;
   box-shadow: 0 2px 8px rgba(0,0,0,.35); }
 .terra-cog-float:hover { opacity: 1; color: #fff; border-color: #5a5a68; }
-.terra-datadir { padding: 10px 20px; border-top: 1px solid #25252d; font-size: 12px; color: #888; }
-.terra-datadir .terra-dd-path { font-family: monospace; font-size: 11px; color: #aaa; word-break: break-all; margin: 4px 0; }
-.terra-datadir .terra-dd-hint { color: #e6a23c; margin-bottom: 6px; }
+.terra-datadir { margin-top: 8px; padding-top: 8px; border-top: 1px solid #262632; font-size: 12px; color: #888; }
+.terra-datadir .terra-dd-path { font-family: monospace; font-size: 11px; color: #aaa; word-break: break-all; margin: 2px 0; }
+.terra-datadir .terra-dd-hint { color: #e6a23c; margin: 6px 0; }
 .terra-datadir .terra-dd-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .terra-dd-restart { color: #7ddc8a; margin-top: 6px; font-size: 12px; }
 .terra-dd-error { color: #f87171; margin-top: 6px; font-size: 12px; }
@@ -135,7 +158,7 @@
 .terra-setup-foot { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; padding: 12px 20px 16px; border-top: 1px solid #25252d; }
 .terra-btn-danger { background: #3a1a1a; border: 1px solid #6b2020; color: #e06060; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
 .terra-btn-danger:hover { background: #4a2020; }
-.terra-fg-body { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; max-height: 240px; overflow: auto; padding-right: 2px; }
+.terra-fg-body { margin-top: 8px; padding-top: 8px; border-top: 1px solid #262632; display: flex; flex-direction: column; gap: 10px; max-height: 240px; overflow: auto; padding-right: 2px; }
 .terra-fg-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: #b5b5c3; }
 .terra-fg-row { display: flex; gap: 8px; align-items: center; }
 .terra-fg-row .terra-input { flex: 1; min-width: 0; }
@@ -181,7 +204,8 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
 
   /* ---------- modal ---------- */
   let overlay = null, modalEl = null, body = null, foot = null, bannerSlot = null, catalogBox = null, bleBox = null;
-  let catalogBtnEl = null, searchInputEl = null, paintChipsFn = null;
+  let catalogBtnEl = null, searchInputEl = null, paintChipsFn = null, addonsCountEl = null;
+  let toolbarEl = null, addonsToolbarSlot = null, catalogToolbarSlot = null, setAddonsOpenFn = null;
   let searchQuery = '';
   let activeCategory = 'All';
   let catalogOpen = false;
@@ -405,6 +429,12 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     catalogOpen = !!open;
     if (modalEl) modalEl.classList.toggle('terra-mode-catalog', catalogOpen);
     if (catalogBox) catalogBox.hidden = !catalogOpen;
+    if (catalogOpen) {
+      if (catalogToolbarSlot && toolbarEl) catalogToolbarSlot.replaceChildren(toolbarEl);
+    } else {
+      if (addonsToolbarSlot && toolbarEl) addonsToolbarSlot.replaceChildren(toolbarEl);
+      if (setAddonsOpenFn) setAddonsOpenFn(true);
+    }
     if (catalogBtnEl) {
       catalogBtnEl.textContent = catalogOpen ? '\u2190 My Addons' : 'GitHub Catalog';
       catalogBtnEl.className = catalogOpen ? 'terra-btn-primary terra-btn-sm' : 'terra-btn terra-btn-sm';
@@ -608,6 +638,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     try {
       const items = await core.call('addons_catalog', { refresh: !!forceRefresh });
       cachedCatalog = sortCatalogItems(items);
+      if (paintChipsFn) paintChipsFn();
       renderCatalogItems();
     } catch (e) {
       const retry = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'Retry');
@@ -705,6 +736,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
       try {
         res = await core.call('addons_list');
         cachedList = res;
+        if (paintChipsFn) paintChipsFn();
       } catch (e) {
         body.textContent = 'Could not load addons: ' + e;
         return;
@@ -827,6 +859,12 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           h('label', { class: 'terra-switch' }, input, h('span'))),
         box));
     }
+    if (addonsCountEl) {
+      const enabledCount = res.addons.filter((x) => x.enabled).length;
+      addonsCountEl.textContent = res.addons.length
+        ? `${enabledCount} enabled \u00b7 ${res.addons.length} total`
+        : 'none';
+    }
     const dirsEl = foot.querySelector('.terra-foot-dirs');
     if (dirsEl) dirsEl.textContent = res.dirs.length ? 'Addon folders: ' + res.dirs.join('  \u00b7  ') : '';
     const verEl = foot.querySelector('.terra-foot-ver');
@@ -843,16 +881,29 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     catalogBtnEl = null;
     searchInputEl = null;
     paintChipsFn = null;
+    addonsCountEl = null;
+    toolbarEl = null;
+    addonsToolbarSlot = null;
+    catalogToolbarSlot = null;
+    setAddonsOpenFn = null;
     catalogOpen = false;
     catalogBatchBusy = false;
     hidePreviews();
     removeEventListener('keydown', onKey, true);
   }
   async function openModal(opts) {
-    if (overlay) { if (opts && opts.expand) settingsToggles.get(opts.expand)?.(true); return; }
+    if (overlay) {
+      if (opts && opts.expand) {
+        if (setAddonsOpenFn) setAddonsOpenFn(true);
+        settingsToggles.get(opts.expand)?.(true);
+      }
+      return;
+    }
     ensureCss();
     body = h('div', { class: 'terra-body' }, 'Loading\u2026');
     bannerSlot = h('div', {});
+    catalogToolbarSlot = h('div', {});
+    addonsToolbarSlot = h('div', {});
     catalogBox = h('div', { class: 'terra-catalog', hidden: '' });
     catalogOpen = false;
 
@@ -884,9 +935,22 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
 
     const chipsRow = h('div', { class: 'terra-chips' });
     const paintChips = () => {
-      const cats = catalogOpen
-        ? ['All', 'Updates', 'HUD', 'Camera', 'Hardware', 'Export', 'Other']
-        : ['All', 'Enabled', 'HUD', 'Camera', 'Hardware', 'Export', 'Other'];
+      const catSet = new Set(['HUD', 'Camera', 'Hardware', 'Export', 'Chat']);
+      const sourceItems = catalogOpen ? (cachedCatalog || []) : ((cachedList && cachedList.addons) || []);
+      for (const item of sourceItems) {
+        const c = (item.category || '').trim();
+        if (c && c !== 'All' && c !== 'Enabled' && c !== 'Updates' && c !== 'Other') {
+          catSet.add(c);
+        }
+      }
+      const middleCats = [...catSet].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+      const cats = [
+        'All',
+        catalogOpen ? 'Updates' : 'Enabled',
+        ...middleCats,
+        'Other',
+      ];
+      if (!cats.includes(activeCategory)) activeCategory = 'All';
       chipsRow.replaceChildren(...cats.map((c) => {
         const b = h('button', {
           class: 'terra-chip' + (activeCategory === c ? ' active' : ''),
@@ -907,6 +971,29 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     const toolbar = h('div', { class: 'terra-toolbar' },
       h('div', { class: 'terra-search-row' }, searchInput),
       chipsRow);
+    toolbarEl = toolbar;
+    addonsToolbarSlot.replaceChildren(toolbar);
+
+    // Addons section (collapsible, open by default)
+    addonsCountEl = h('span', { class: 'terra-ver' }, '');
+    const addonsToggleBtn = h('button', { class: 'terra-addons-toggle', type: 'button', 'aria-expanded': 'true' },
+      h('span', { class: 'terra-caret', 'aria-hidden': 'true' }, '\u25b8'),
+      h('span', { class: 'terra-panel-label' }, 'Addons'),
+      addonsCountEl);
+    const addonsContent = h('div', { class: 'terra-addons-content' }, addonsToolbarSlot, body);
+    const addonsBox = h('div', { class: 'terra-ble terra-addons open' },
+      h('div', { class: 'terra-addons-head' },
+        addonsToggleBtn,
+        h('div', { class: 'terra-addons-head-actions' }, catalogBtn, uploadBtn, zipInput)),
+      addonsContent);
+    const setAddonsOpen = (open) => {
+      const next = open === undefined ? !addonsBox.classList.contains('open') : !!open;
+      addonsBox.classList.toggle('open', next);
+      addonsToggleBtn.setAttribute('aria-expanded', next ? 'true' : 'false');
+      addonsContent.hidden = !next;
+    };
+    setAddonsOpenFn = setAddonsOpen;
+    addonsToggleBtn.addEventListener('click', () => setAddonsOpen());
 
     // Bluetooth devices section (collapsible)
     const bleRefreshBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'Refresh');
@@ -927,8 +1014,11 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
 
     bleBox = h('details', { class: 'terra-ble' },
       h('summary', {},
-        h('span', {}, 'Bluetooth devices ', h('span', { class: 'terra-ble-summary-count terra-ver' }, '')),
-        h('span', { style: 'display:flex;gap:6px;' }, bleRefreshBtn, bleDropAllBtn)),
+        h('span', { class: 'terra-panel-title' },
+          h('span', { class: 'terra-caret', 'aria-hidden': 'true' }, '\u25b8'),
+          h('span', { class: 'terra-panel-label' }, 'Bluetooth devices'),
+          h('span', { class: 'terra-ble-summary-count terra-ver' }, '')),
+        h('span', { style: 'display:flex;gap:6px;flex:none;' }, bleRefreshBtn, bleDropAllBtn)),
       h('div', { class: 'terra-ble-list' }, 'Loading\u2026'));
     bleBox.addEventListener('toggle', () => { if (bleBox.open) renderBlePanel(); });
 
@@ -937,13 +1027,27 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     const fgBody = h('div', { class: 'terra-fg-body' });
     const fgBox = h('details', { class: 'terra-ble terra-fg', hidden: '' },
       h('summary', {},
-        h('span', {}, 'Frame Generation (Experimental) ', fgSummaryBadge)),
+        h('span', { class: 'terra-panel-title' },
+          h('span', { class: 'terra-caret', 'aria-hidden': 'true' }, '\u25b8'),
+          'Frame Generation (Experimental)',
+          fgSummaryBadge)),
       fgBody);
 
-    // Data folder section
-    const ddSection = h('div', { class: 'terra-datadir' }, h('strong', {}, 'Data folder'));
+    // Data folder section (collapsed by default)
+    const ddSummaryBadge = h('span', { class: 'terra-ver terra-dd-summary-path' }, '');
+    const ddSection = h('div', { class: 'terra-datadir' });
+    const ddBox = h('details', { class: 'terra-ble terra-dd' },
+      h('summary', {},
+        h('span', { class: 'terra-panel-title' },
+          h('span', { class: 'terra-caret', 'aria-hidden': 'true' }, '\u25b8'),
+          h('span', { class: 'terra-panel-label' }, 'Data folder'),
+          ddSummaryBadge)),
+      ddSection);
+
+    const panelsBox = h('div', { class: 'terra-panels' }, bleBox, fgBox, ddBox);
+    const mainBox = h('div', { class: 'terra-main' }, addonsBox, panelsBox);
+
     foot = h('div', { class: 'terra-foot' },
-      ddSection,
       h('div', { class: 'terra-foot-dirs' }),
       h('div', { class: 'terra-foot-bottom' },
         h('div', { class: 'terra-foot-ver' }, 'Terra'),
@@ -951,20 +1055,15 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
       )
     );
 
-    const modal = h('div', { class: 'terra-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Terra addons' },
+    const modal = h('div', { class: 'terra-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Terra Settings' },
       h('div', { class: 'terra-head' },
-        h('div', { class: 'terra-head-title' }, h('h3', {}, 'Terra addons')),
+        h('div', { class: 'terra-head-title' }, h('h3', {}, 'Terra Settings')),
         h('div', { class: 'terra-head-actions' },
-          catalogBtn,
-          uploadBtn,
-          zipInput,
           h('button', { class: 'terra-x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '\u00d7'))),
-      toolbar,
       bannerSlot,
+      catalogToolbarSlot,
       catalogBox,
-      body,
-      bleBox,
-      fgBox,
+      mainBox,
       foot);
 
     modalEl = modal;
@@ -1161,10 +1260,13 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     (async () => {
       try {
         const st = await core.call('terra_data_dir_status', {});
+        ddSummaryBadge.textContent = st.path || 'unknown';
         const pathEl = h('div', { class: 'terra-dd-path' }, st.path || 'unknown');
         const statusMsg = h('div', {});
         ddSection.append(pathEl);
         if (st.isDefault && navigator.userAgent.includes('Android')) {
+          ddSummaryBadge.textContent = (st.path || 'default') + ' (hidden)';
+          ddBox.open = true;
           ddSection.append(h('div', { class: 'terra-dd-hint' },
             'This is a hidden Android folder. Choose a visible folder so your file manager can see it.'));
         }
@@ -1181,6 +1283,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
               const res = await core.call('terra_pick_data_dir', {});
               if (res.status === 'success') {
                 pathEl.textContent = res.path;
+                ddSummaryBadge.textContent = res.path;
                 ddSection.querySelector('.terra-dd-hint')?.remove();
                 statusMsg.className = 'terra-dd-restart';
                 statusMsg.textContent = 'Folder saved. Please close and reopen Terra for the new folder to take effect.';
@@ -1238,8 +1341,8 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           class: 'action-button terra-cog-action',
           role: 'button',
           tabindex: '-1',
-          'aria-label': 'Terra addons',
-          title: 'Terra addons (Alt+T)',
+          'aria-label': 'Terra Settings',
+          title: 'Terra Settings (Alt+T)',
         });
         actionCog.innerHTML = GEAR_ACTION;
         actionCog.addEventListener('click', (e) => {
@@ -1272,7 +1375,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     if (anchor) {
       if (floatCog && floatCog.parentNode) floatCog.remove();
       if (!cog) {
-        cog = h('button', { type: 'button', 'aria-label': 'Terra addons', title: 'Terra addons (Alt+T)' });
+        cog = h('button', { type: 'button', 'aria-label': 'Terra Settings', title: 'Terra Settings (Alt+T)' });
         cog.innerHTML = GEAR;
         cog.addEventListener('click', () => openModal());
       }
@@ -1284,7 +1387,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     const onRideLike = location.pathname.startsWith('/ride') || location.pathname.startsWith('/spectate');
     if (onRideLike && document.body) {
       if (!floatCog) {
-        floatCog = h('button', { type: 'button', class: 'terra-cog-float', 'aria-label': 'Terra addons', title: 'Terra addons (Alt+T)' });
+        floatCog = h('button', { type: 'button', class: 'terra-cog-float', 'aria-label': 'Terra Settings', title: 'Terra Settings (Alt+T)' });
         floatCog.innerHTML = GEAR;
         floatCog.addEventListener('click', () => openModal());
       }
