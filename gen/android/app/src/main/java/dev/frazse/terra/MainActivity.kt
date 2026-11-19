@@ -24,9 +24,15 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ClientCertRequest
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
 import android.webkit.HttpAuthHandler
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -223,6 +229,7 @@ class MainActivity : TauriActivity() {
   private val patchedChunks = ConcurrentHashMap<String, ByteArray>()
   private val unmatchedChunks = ConcurrentHashMap.newKeySet<String>()
   private var btAppWrappedClient: WebViewClient? = null
+  private var wrappedChromeClient: WebChromeClient? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     instance = this
@@ -717,7 +724,22 @@ class MainActivity : TauriActivity() {
     try {
       CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
     } catch (_: Exception) {}
-    wv.webChromeClient = object : WebChromeClient() {
+
+    val delegate = try {
+      when {
+        WebViewFeature.isFeatureSupported(WebViewFeature.GET_WEB_CHROME_CLIENT) ->
+          WebViewCompat.getWebChromeClient(wv)
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ->
+          wv.webChromeClient
+        else -> null
+      }
+    } catch (_: Exception) {
+      null
+    }
+
+    if (delegate != null && delegate === wrappedChromeClient) return
+
+    val chromeWrapper = object : WebChromeClient() {
       override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
         toggleFullscreen(true)
       }
@@ -725,7 +747,85 @@ class MainActivity : TauriActivity() {
       override fun onHideCustomView() {
         toggleFullscreen(false)
       }
+
+      override fun onPermissionRequest(request: PermissionRequest) {
+        if (delegate != null) delegate.onPermissionRequest(request)
+        else super.onPermissionRequest(request)
+      }
+
+      override fun onPermissionRequestCanceled(request: PermissionRequest) {
+        if (delegate != null) delegate.onPermissionRequestCanceled(request)
+        else super.onPermissionRequestCanceled(request)
+      }
+
+      override fun onGeolocationPermissionsShowPrompt(
+        origin: String,
+        callback: GeolocationPermissions.Callback
+      ) {
+        if (delegate != null) delegate.onGeolocationPermissionsShowPrompt(origin, callback)
+        else super.onGeolocationPermissionsShowPrompt(origin, callback)
+      }
+
+      override fun onGeolocationPermissionsHidePrompt() {
+        if (delegate != null) delegate.onGeolocationPermissionsHidePrompt()
+        else super.onGeolocationPermissionsHidePrompt()
+      }
+
+      override fun onJsAlert(
+        view: WebView,
+        url: String,
+        message: String,
+        result: JsResult
+      ): Boolean =
+        delegate?.onJsAlert(view, url, message, result)
+          ?: super.onJsAlert(view, url, message, result)
+
+      override fun onJsConfirm(
+        view: WebView,
+        url: String,
+        message: String,
+        result: JsResult
+      ): Boolean =
+        delegate?.onJsConfirm(view, url, message, result)
+          ?: super.onJsConfirm(view, url, message, result)
+
+      override fun onJsPrompt(
+        view: WebView,
+        url: String,
+        message: String,
+        defaultValue: String,
+        result: JsPromptResult
+      ): Boolean =
+        delegate?.onJsPrompt(view, url, message, defaultValue, result)
+          ?: super.onJsPrompt(view, url, message, defaultValue, result)
+
+      override fun onShowFileChooser(
+        webView: WebView,
+        filePathCallback: ValueCallback<Array<Uri?>?>,
+        fileChooserParams: FileChooserParams
+      ): Boolean =
+        delegate?.onShowFileChooser(webView, filePathCallback, fileChooserParams)
+          ?: super.onShowFileChooser(webView, filePathCallback, fileChooserParams)
+
+      override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean =
+        delegate?.onConsoleMessage(consoleMessage)
+          ?: super.onConsoleMessage(consoleMessage)
+
+      override fun onReceivedTitle(view: WebView, title: String) {
+        if (delegate != null) delegate.onReceivedTitle(view, title)
+        else super.onReceivedTitle(view, title)
+      }
+
+      override fun getDefaultVideoPoster(): Bitmap? =
+        delegate?.defaultVideoPoster ?: super.getDefaultVideoPoster()
+
+      override fun onProgressChanged(view: WebView, newProgress: Int) {
+        if (delegate != null) delegate.onProgressChanged(view, newProgress)
+        else super.onProgressChanged(view, newProgress)
+      }
     }
+    wrappedChromeClient = chromeWrapper
+    wv.webChromeClient = chromeWrapper
   }
 
   private fun findWebView(view: View): WebView? {
