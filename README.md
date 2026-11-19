@@ -20,6 +20,8 @@
 * **💾 Local File Export:** `terra.files.save` saves `.fit`, `.gpx`, `.tcx`, `.json`, or `.csv` exports directly to `Downloads/Terra/`.
 * **📁 Android Custom Data Folder:** optional setup & Cog-menu folder picker on Android lets you store `addons/`, `addon-data/`, and `devices.json` in a user-visible folder (e.g. `/storage/emulated/0/Terra`).
 * **💬 Discord Rich Presence:** broadcasts active ride status to the local Discord desktop client (including Flatpak and Snap Discord IPC sockets on Linux).
+* **📊 Hardware & App Performance Telemetry:** native `terra.perf.stats()` API reporting CPU/GPU utilization & temperatures, memory usage, and Android thermal status.
+* **🎞️ Experimental Frame Generation (Linux desktop):** optional `lsfg-vk` / Lossless Scaling integration in the Cog menu with automatic `/ride` & `/spectate` ride-only toggling.
 
 ---
 
@@ -67,7 +69,10 @@ Addons are Tampermonkey-style JavaScript/CSS bundles (`manifest.json`) evaluated
 * **`karoo-bridge`** — Streams live ride telemetry over LAN to the Hammerhead Karoo companion APK (`karoo-apk/`)
 * **`sunto-export`** — Exports completed cycling and rowing sessions to `.fit` / Suunto
 * **`discord-rich-presence`** — Publishes current route, distance, and power/speed to Discord
-* **`rider-speed`**, **`fps-monitor`**, **`pip-cam`**, **`sbs3d`** — Speed HUD, FPS counter, Picture-in-Picture chase cam, and side-by-side 3D view
+* **`ghost-rider`** — 3D ghost rider racing with cloned avatar and FIT/GPX track replay
+* **`voice-chat`** — Whisper voice-to-text push-to-talk / hands-free chat addon
+* **`render-scale`** — Sub-native 3D render scaling (0.5x / 0.75x) for lower-power GPUs
+* **`rider-speed`**, **`fps-monitor`**, **`pip-cam`**, **`sbs3d`** — Speed HUD, FPS & hardware telemetry overlay, Picture-in-Picture chase cam, and side-by-side 3D view
 
 </details>
 
@@ -110,7 +115,7 @@ npm run dist
 
 Output AppImage:
 ```text
-electron/dist/Terra-0.10.1.AppImage
+electron/dist/Terra-0.11.0.AppImage
 ```
 
 #### Development mode

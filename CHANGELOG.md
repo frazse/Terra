@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.0] — Performance Telemetry, Linux Frame Generation & Android Microphone Support
+
+### Added
+- **Hardware & app telemetry (`terra.perf.stats()`)** — native performance stats API across Linux desktop (CPU/GPU utilization & temperatures, process CPU/RAM via Electron + Rust) and Android (thermal status, CPU/battery temperatures, RAM).
+- **Experimental Frame Generation (Linux desktop)** — `lsfg-vk` / Lossless Scaling integration in the Cog menu (`framegen_get`, `framegen_set`, `framegen_pick_dll`, `framegen_relaunch`) with automatic XWayland + Vulkan relaunch, flow scale & performance mode controls, and dynamic ride-only toggling on `/ride` and `/spectate`.
+- **Android microphone & WebRTC permissions** — declared `RECORD_AUDIO` / `MODIFY_AUDIO_SETTINGS` and forwarded `WebChromeClient` permission requests so in-page audio/voice addons work on Android.
+
+### Fixed
+- **Graceful desktop shutdown** — Electron now intercepts window close, `SIGINT`/`SIGTERM`, and framegen relaunches to detach CDP, dispatch `pagehide`, and allow a 450 ms drain alongside `ble_disconnect_all` before terminating the Rust backend so Wi-Fi trainer TCP sessions release cleanly.
+
+### Changed
+- **Refreshed `Terra-Addons` submodule** — includes `fps-monitor` v0.3.0 (hardware telemetry, engine render/scene stats, base/framegen FPS display), `ghost-rider` v0.1.0, `voice-chat` v0.1.1, `render-scale` v0.1.0, `zwift-ride` v0.6.4, `wifi-trainer-bridge` v2.0.2, `garmin-hud` v1.4.1, `nameplates` v0.7.3, and `rider-speed` v0.2.1.
+
 ## [0.10.1] — Account Flyout Interaction Fix & Bundled Addon Refresh
 
 ### Fixed
