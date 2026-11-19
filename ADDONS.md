@@ -26,6 +26,17 @@ Changes apply immediately (the addon is started or cleaned up) and are remembere
     }
 The addon starts when the URL matches (also after SPA navigation) and is cleaned up when it stops matching.
 
+## Addon `CHANGELOG.md` (for GitHub Catalog)
+Each addon folder may include a `CHANGELOG.md` with `## <version>` sections (newest version first) and bulleted release notes:
+
+    ## 0.3.0
+    - Add hardware telemetry & engine render/scene stats
+
+    ## 0.2.0
+    - Add optional frame time and memory metrics
+
+When updating an addon in `Terra-Addons`, bump `manifest.json`'s `version` and add the matching `## <version>` section to `<addon>/CHANGELOG.md` in the same commit so Terra's GitHub Catalog can display "What's new" for pending updates.
+
 ## The `terra` object
 | API | |
 |---|---|

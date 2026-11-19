@@ -1073,6 +1073,7 @@ pub struct CatalogItem {
     pub default_enabled: bool,
     pub installed_version: Option<String>,
     pub update_available: bool,
+    pub changelog: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1101,6 +1102,20 @@ pub async fn addons_catalog(
     let local: HashMap<String, String> = load_manifests(&app)
         .into_iter()
         .map(|a| (a.id, a.version))
+        .collect();
+    let changelogs: HashMap<&str, String> = entries
+        .iter()
+        .filter_map(|e| {
+            let parts: Vec<&str> = e.path.split('/').collect();
+            if parts.len() == 3 && parts[2].eq_ignore_ascii_case("changelog.md") {
+                let text = String::from_utf8(e.data.clone()).ok()?;
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some((parts[1], trimmed.to_string()));
+                }
+            }
+            None
+        })
         .collect();
 
     let mut items = Vec::new();
@@ -1135,6 +1150,7 @@ pub async fn addons_catalog(
             default_enabled: m.enabled,
             installed_version,
             update_available,
+            changelog: changelogs.get(folder).cloned(),
         });
     }
     items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));

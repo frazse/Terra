@@ -35,9 +35,14 @@
 .terra-catalog-list { flex: 1; min-height: 0; overflow: auto; }
 .terra-cat-section { padding: 10px 0 4px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #8f96a8; }
 .terra-cat-section.updates { color: #ff8c7a; }
-.terra-cat-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid #22222b; }
+.terra-cat-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid #22222b; }
 .terra-cat-item:first-of-type { border-top: 0; }
 .terra-cat-item.has-update { border-top-color: #2f2224; border-left: 3px solid #ff6b57; padding: 9px 8px 9px 10px; margin: 4px 0; background: rgba(255, 107, 87, 0.07); border-radius: 7px; }
+.terra-cat-changelog { margin-top: 7px; padding: 7px 9px; border-radius: 6px; background: rgba(0, 0, 0, .28); border: 1px solid #2a2a35; font-size: 11px; color: #c7cad6; }
+.terra-cat-cl-ver { font-weight: 700; color: #fff; margin-top: 5px; }
+.terra-cat-cl-ver:first-child { margin-top: 0; }
+.terra-cat-cl-list { margin: 2px 0 0 15px; padding: 0; }
+.terra-cat-cl-list li { margin: 1px 0; line-height: 1.35; }
 .terra-modal.terra-mode-catalog .terra-body,
 .terra-modal.terra-mode-catalog .terra-ble,
 .terra-modal.terra-mode-catalog .terra-foot { display: none; }
@@ -330,6 +335,54 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     for (const [id, p] of previews) { previews.delete(id); firePreview(id, null); }
   }
 
+  function parseVerTuple(v) {
+    const clean = String(v || '').trim().replace(/^v/i, '');
+    if (!clean) return null;
+    const nums = [];
+    for (const part of clean.split('.')) {
+      const head = part.split(/[-+]/)[0];
+      if (!/^\d+$/.test(head)) return null;
+      nums.push(Number(head));
+    }
+    return nums;
+  }
+
+  function compareVersions(a, b) {
+    const pa = parseVerTuple(a);
+    const pb = parseVerTuple(b);
+    if (pa && pb) {
+      const len = Math.max(pa.length, pb.length);
+      for (let i = 0; i < len; i++) {
+        const da = pa[i] || 0;
+        const db = pb[i] || 0;
+        if (da !== db) return da > db ? 1 : -1;
+      }
+      return 0;
+    }
+    const sa = String(a || '').trim();
+    const sb = String(b || '').trim();
+    return sa === sb ? 0 : (sa > sb ? 1 : -1);
+  }
+
+  function parseChangelogSections(md) {
+    if (!md || typeof md !== 'string') return [];
+    const sections = [];
+    let cur = null;
+    for (const rawLine of md.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      const hdr = line.match(/^#{1,3}\s*\[?v?([0-9]+(?:\.[0-9]+)*(?:[-+][^\s\]]+)?)\]?(?:\s*[—–-]\s*(.+))?$/i);
+      if (hdr) {
+        cur = { version: hdr[1], title: hdr[2] || '', lines: [] };
+        sections.push(cur);
+        continue;
+      }
+      if (!cur || !line) continue;
+      const bullet = line.replace(/^[-*]\s+/, '');
+      if (bullet) cur.lines.push(bullet);
+    }
+    return sections;
+  }
+
   function sortCatalogItems(items) {
     return [...(items || [])].sort((a, b) => {
       if (!!a.updateAvailable !== !!b.updateAvailable) return a.updateAvailable ? -1 : 1;
@@ -469,6 +522,60 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           btn.textContent = btnLabel;
         }
       });
+      const sections = parseChangelogSections(item.changelog);
+      const newerSections = (item.updateAvailable && item.installedVersion)
+        ? sections.filter((s) => compareVersions(s.version, item.installedVersion) > 0)
+        : [];
+      const defaultSections = newerSections.length > 0 ? newerSections : sections;
+      let showingAll = newerSections.length === 0;
+      const clBox = h('div', { class: 'terra-cat-changelog', hidden: '' });
+      const paintCl = (list) => {
+        clBox.replaceChildren();
+        for (const sec of list) {
+          clBox.append(h('div', { class: 'terra-cat-cl-ver' }, 'v' + sec.version + (sec.title ? ' \u2014 ' + sec.title : '')));
+          if (sec.lines.length) {
+            clBox.append(h('ul', { class: 'terra-cat-cl-list' }, ...sec.lines.map((l) => h('li', {}, l))));
+          }
+        }
+      };
+
+      const clActions = [];
+      if (newerSections.length > 0) {
+        paintCl(newerSections);
+        clBox.hidden = false;
+        const toggleLabel = () => (clBox.hidden ? 'What\u2019s new \u25be' : 'Hide notes \u25b4');
+        const toggleBtn = h('button', { class: 'terra-link', type: 'button' }, toggleLabel());
+        toggleBtn.addEventListener('click', () => {
+          clBox.hidden = !clBox.hidden;
+          toggleBtn.textContent = toggleLabel();
+        });
+        clActions.push(toggleBtn);
+        if (sections.length > newerSections.length) {
+          const allBtn = h('button', { class: 'terra-link', type: 'button' }, 'Full changelog');
+          allBtn.addEventListener('click', () => {
+            showingAll = !showingAll;
+            paintCl(showingAll ? sections : newerSections);
+            clBox.hidden = false;
+            toggleBtn.textContent = toggleLabel();
+            allBtn.textContent = showingAll ? 'Only new versions' : 'Full changelog';
+          });
+          clActions.push(allBtn);
+        }
+      } else if (sections.length > 0) {
+        const toggleBtn = h('button', { class: 'terra-link', type: 'button' }, 'Changelog \u25be');
+        toggleBtn.addEventListener('click', () => {
+          if (clBox.hidden) {
+            paintCl(defaultSections);
+            clBox.hidden = false;
+            toggleBtn.textContent = 'Changelog \u25b4';
+          } else {
+            clBox.hidden = true;
+            toggleBtn.textContent = 'Changelog \u25be';
+          }
+        });
+        clActions.push(toggleBtn);
+      }
+
       listWrap.append(h('div', { class: 'terra-cat-item' + (item.updateAvailable ? ' has-update' : '') },
         h('div', { class: 'terra-info' },
           h('div', { class: 'terra-name' },
@@ -476,7 +583,9 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
             h('span', { class: 'terra-ver' }, item.updateAvailable ? `${item.installedVersion} \u2192 v${item.version}` : 'v' + item.version),
             h('span', { class: 'terra-badge' }, item.category || 'Other'),
             item.updateAvailable ? h('span', { class: 'terra-badge update' }, 'Update') : ''),
-          item.description ? h('div', { class: 'terra-desc' }, item.description) : ''),
+          item.description ? h('div', { class: 'terra-desc' }, item.description) : '',
+          clActions.length ? h('div', { class: 'terra-actions-row' }, ...clActions) : '',
+          clBox),
         btn));
     };
 

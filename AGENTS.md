@@ -276,6 +276,11 @@ Both list devices via Rust `chooser_candidates` and confirm via `chooser_pick`.
 
 - Two repos: **Terra** (this) and **Terra-Addons** (the `addons/` git submodule).
   Bumping an addon requires a **submodule pointer commit** in Terra too.
+- **Addon changelogs (mandatory):** whenever you update or bump an addon in
+  `Terra-Addons`, update that addon's `<addon>/CHANGELOG.md` in the same commit
+  (`## <version>` heading + bullet points, newest version first). Terra's GitHub
+  Catalog reads `<addon>/CHANGELOG.md` directly from the archive to show "What's new"
+  for missing versions.
 - Small, reviewable, scoped commits (`feat(settings): …`, `fix(ble): …`, `chore(bridge): …`).
 - **Do not `git push` until the user has confirmed the change works and explicitly says
   push.** (Repeated, non-negotiable rule in this project.)
@@ -316,7 +321,7 @@ Both list devices via Rust `chooser_candidates` and confirm via `chooser_pick`.
 | --- | --- |
 | Add a `terra.*` API method | `shim/addons-loader.js` (expose) + `src/addons.rs` + `src/rpc.rs` (arm) + `src/lib_tauri.rs` (command) + non-Linux: `build.rs` `AppManifest::commands` + `capabilities/remote.json` (`allow-<cmd>`) + `ADDONS.md` (doc) |
 | New cog-menu setting type | `src/addons.rs` (`SettingDef`) + `shim/terra-ui.js` (render) + `shim/addons-loader.js` (`settings.preview`) |
-| Edit a bundled addon | `addons/<id>/` (submodule) → test in `~/.local/share/terra/addons/<id>/` → bump Terra pointer |
+| Edit a bundled addon | `addons/<id>/` (submodule: update code + `manifest.json` version + `<id>/CHANGELOG.md`) → test in `~/.local/share/terra/addons/<id>/` → bump Terra pointer |
 | BLE / GATT behavior | `src/ble.rs` + `shim/bluetooth-shim.js` |
 | Ride data / graphs | `src/ride.rs` + `ADDONS.md` §Live-ride-data |
 | Discord presence | `src/discord.rs` (+ the `discord-rich-presence` Terra-Addon) |
