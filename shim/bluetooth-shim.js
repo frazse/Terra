@@ -517,7 +517,10 @@
     } catch (e) { log('ride-channel', String(e)); ride.channel = null; }
   }
 
-  window.__terraCore = { call, log, devices, bus, toB64, toDV, deviceFor, ride };
+  window.__terraCore = {
+    call, log, devices, bus, toB64, toDV, deviceFor, ride,
+    requestDevice: (opts) => bluetooth.requestDevice(opts),
+  };
 
   Object.defineProperty(navigator, 'bluetooth', { value: bluetooth, configurable: true });
   log('shim-installed', { url: location.href });

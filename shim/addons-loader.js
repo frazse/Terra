@@ -142,7 +142,9 @@
       ble: {
         devices: () => [...core.devices.values()].map((d) => ({ id: d.id, name: d.name, connected: d.gatt.connected })),
         // Pair a device for this addon (always shows the chooser); Terra remembers it for this addon only.
-        request: (options) => navigator.bluetooth.requestDevice({ ...options, __terraOwner: meta.id }),
+        request: (options) => (core.requestDevice
+          ? core.requestDevice({ ...options, __terraOwner: meta.id })
+          : navigator.bluetooth.requestDevice({ ...options, __terraOwner: meta.id })),
         // Devices this addon paired earlier, as BluetoothDevice objects (no UI).
         remembered: async () => (await core.call('ble_remembered', { owner: meta.id })).map((i) => core.deviceFor(i)),
         // Let the page (not only this addon) use the devices this addon paired. Resets on every page load.
