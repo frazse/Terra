@@ -429,6 +429,12 @@
           "markdownDescription": "Enables the discord_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the perf_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-perf-stats",
+          "markdownDescription": "Enables the perf_stats command without any pre-configured scope."
+        },
+        {
           "description": "Enables the ride_history command without any pre-configured scope.",
           "type": "string",
           "const": "allow-ride-history",
@@ -727,6 +733,12 @@
           "type": "string",
           "const": "deny-discord-status",
           "markdownDescription": "Denies the discord_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the perf_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-perf-stats",
+          "markdownDescription": "Denies the perf_stats command without any pre-configured scope."
         },
         {
           "description": "Denies the ride_history command without any pre-configured scope.",
