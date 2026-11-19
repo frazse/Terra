@@ -29,10 +29,21 @@
 .terra-banner.ok { background: #163022; border: 1px solid #255a3b; color: #8be8ac; }
 .terra-banner.err { background: #361919; border: 1px solid #6b2626; color: #fca5a5; }
 .terra-catalog { padding: 12px 20px; border-bottom: 1px solid #25252d; background: #121217; max-height: 280px; overflow: auto; }
-.terra-catalog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.terra-catalog-head strong { font-size: 13px; color: #fff; }
-.terra-cat-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid #22222b; }
+.terra-catalog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.terra-catalog-head strong { font-size: 13px; color: #fff; display: flex; align-items: center; gap: 8px; }
+.terra-catalog-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.terra-catalog-list { flex: 1; min-height: 0; overflow: auto; }
+.terra-cat-section { padding: 10px 0 4px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #8f96a8; }
+.terra-cat-section.updates { color: #ff8c7a; }
+.terra-cat-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid #22222b; }
 .terra-cat-item:first-of-type { border-top: 0; }
+.terra-cat-item.has-update { border-top-color: #2f2224; border-left: 3px solid #ff6b57; padding: 9px 8px 9px 10px; margin: 4px 0; background: rgba(255, 107, 87, 0.07); border-radius: 7px; }
+.terra-modal.terra-mode-catalog .terra-body,
+.terra-modal.terra-mode-catalog .terra-ble,
+.terra-modal.terra-mode-catalog .terra-foot { display: none; }
+.terra-modal.terra-mode-catalog .terra-catalog { display: flex; flex-direction: column; flex: 1; min-height: 120px; max-height: none; border-bottom: 0; padding: 0; overflow: hidden; }
+.terra-modal.terra-mode-catalog .terra-catalog-head { padding: 10px 20px; margin-bottom: 0; border-bottom: 1px solid #25252d; background: #14141a; flex: none; }
+.terra-modal.terra-mode-catalog .terra-catalog-list { padding: 4px 20px 14px; }
 .terra-body { padding: 4px 20px; overflow: auto; flex: 1; min-height: 120px; }
 .terra-item { border-bottom: 1px solid #25252d; }
 .terra-item:last-child { border-bottom: 0; }
@@ -60,6 +71,7 @@
 .terra-ver { color: #888; font-weight: 400; font-size: 12px; }
 .terra-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: #262632; color: #9ea8b8; border: 1px solid #353545; text-transform: uppercase; letter-spacing: .03em; }
 .terra-badge.user { background: #1e293b; color: #7dd3fc; border-color: #334155; }
+.terra-badge.update { background: #3a1f1c; color: #ff9a8b; border-color: #6b2e26; }
 .terra-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; flex: none; }
 .terra-dot.on { background: #4ade80; }
 .terra-desc { color: #b0b0bb; font-size: 12px; margin-top: 3px; }
@@ -163,11 +175,14 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
   };
 
   /* ---------- modal ---------- */
-  let overlay = null, body = null, foot = null, bannerSlot = null, catalogBox = null, bleBox = null;
+  let overlay = null, modalEl = null, body = null, foot = null, bannerSlot = null, catalogBox = null, bleBox = null;
+  let catalogBtnEl = null, searchInputEl = null, paintChipsFn = null;
   let searchQuery = '';
   let activeCategory = 'All';
   let catalogOpen = false;
   let cachedList = null;
+  let cachedCatalog = null;
+  let catalogBatchBusy = false;
 
   const dots = new Map(); // addon id -> dot element
   const settingsToggles = new Map(); // addon id -> open/close its settings section
@@ -315,6 +330,166 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     for (const [id, p] of previews) { previews.delete(id); firePreview(id, null); }
   }
 
+  function sortCatalogItems(items) {
+    return [...(items || [])].sort((a, b) => {
+      if (!!a.updateAvailable !== !!b.updateAvailable) return a.updateAvailable ? -1 : 1;
+      return String(a.name || a.id || '').localeCompare(String(b.name || b.id || ''), undefined, { sensitivity: 'base' });
+    });
+  }
+
+  function filteredCatalogItems(items) {
+    const q = searchQuery.trim().toLowerCase();
+    return items.filter((item) => {
+      if (activeCategory === 'Updates' && !item.updateAvailable) return false;
+      if (activeCategory !== 'All' && activeCategory !== 'Updates' && (item.category || 'Other') !== activeCategory) return false;
+      if (!q) return true;
+      const hay = `${item.id} ${item.name} ${item.description || ''} ${item.category || ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  function setCatalogOpen(open) {
+    catalogOpen = !!open;
+    if (modalEl) modalEl.classList.toggle('terra-mode-catalog', catalogOpen);
+    if (catalogBox) catalogBox.hidden = !catalogOpen;
+    if (catalogBtnEl) {
+      catalogBtnEl.textContent = catalogOpen ? '\u2190 My Addons' : 'GitHub Catalog';
+      catalogBtnEl.className = catalogOpen ? 'terra-btn-primary terra-btn-sm' : 'terra-btn terra-btn-sm';
+    }
+    if (catalogOpen && activeCategory === 'Enabled') activeCategory = 'All';
+    if (!catalogOpen && activeCategory === 'Updates') activeCategory = 'All';
+    if (searchInputEl) {
+      searchInputEl.placeholder = catalogOpen ? 'Search GitHub catalog\u2026' : 'Search addons\u2026';
+    }
+    if (paintChipsFn) paintChipsFn();
+    if (catalogOpen) loadCatalog(false);
+    else render(false);
+  }
+
+  function renderCatalogItems() {
+    if (!catalogBox || !cachedCatalog) return;
+    const sorted = sortCatalogItems(cachedCatalog);
+    const updatable = sorted.filter((x) => x.updateAvailable);
+    const filtered = filteredCatalogItems(sorted);
+
+    const refreshBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'Refresh');
+    refreshBtn.disabled = catalogBatchBusy;
+    refreshBtn.addEventListener('click', () => loadCatalog(true));
+
+    const closeCatBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, '\u2190 Back');
+    closeCatBtn.disabled = catalogBatchBusy;
+    closeCatBtn.addEventListener('click', () => setCatalogOpen(false));
+
+    const headActions = [];
+    if (updatable.length > 0) {
+      const updateAllBtn = h('button', { class: 'terra-btn-primary terra-btn-sm', type: 'button' }, `Update all (${updatable.length})`);
+      updateAllBtn.disabled = catalogBatchBusy;
+      updateAllBtn.addEventListener('click', async () => {
+        catalogBatchBusy = true;
+        refreshBtn.disabled = true;
+        closeCatBtn.disabled = true;
+        updateAllBtn.disabled = true;
+        for (const b of catalogBox.querySelectorAll('.terra-cat-item button')) b.disabled = true;
+        let ok = 0;
+        const failed = [];
+        for (let i = 0; i < updatable.length; i++) {
+          const item = updatable[i];
+          updateAllBtn.textContent = `Updating ${i + 1}/${updatable.length}\u2026`;
+          try {
+            await core.call('addons_install_github', { id: item.id });
+            ok++;
+          } catch (e) {
+            failed.push(`${item.name}: ${e}`);
+          }
+        }
+        catalogBatchBusy = false;
+        addons.refresh();
+        await render(true);
+        await loadCatalog(false);
+        if (failed.length === 0) {
+          showBanner(`Updated ${ok} addon${ok === 1 ? '' : 's'} from GitHub.`, 'ok');
+        } else {
+          showBanner(`Updated ${ok}/${updatable.length} addons. Failed: ${failed.join('; ')}`, 'err');
+        }
+      });
+      headActions.push(updateAllBtn);
+    }
+    headActions.push(refreshBtn, closeCatBtn);
+
+    const countText = filtered.length !== sorted.length
+      ? `${filtered.length} / ${sorted.length}`
+      : `${sorted.length}`;
+    const headTitle = h('strong', {},
+      `GitHub Catalog (${countText})`,
+      updatable.length > 0
+        ? h('span', { class: 'terra-badge update' }, `${updatable.length} update${updatable.length === 1 ? '' : 's'}`)
+        : '');
+
+    const head = h('div', { class: 'terra-catalog-head' },
+      headTitle,
+      h('div', { class: 'terra-catalog-actions' }, ...headActions));
+
+    const listWrap = h('div', { class: 'terra-catalog-list' });
+    catalogBox.replaceChildren(head, listWrap);
+
+    if (!sorted.length) {
+      listWrap.append(h('div', { class: 'terra-empty' }, 'No addons found in repository.'));
+      return;
+    }
+    if (!filtered.length) {
+      listWrap.append(h('div', { class: 'terra-empty' }, 'No catalog addons match the current search or filter.'));
+      return;
+    }
+
+    const filteredUpdates = filtered.filter((x) => x.updateAvailable);
+    const filteredRest = filtered.filter((x) => !x.updateAvailable);
+
+    const appendItem = (item) => {
+      const isInstalled = !!item.installedVersion;
+      const btnLabel = item.updateAvailable
+        ? `Update (${item.installedVersion} \u2192 ${item.version})`
+        : isInstalled ? `Reinstall v${item.version}` : `Install v${item.version}`;
+      const btn = h('button', {
+        class: (item.updateAvailable || !isInstalled) ? 'terra-btn-primary terra-btn-sm' : 'terra-btn terra-btn-sm',
+        type: 'button',
+      }, btnLabel);
+      btn.disabled = catalogBatchBusy;
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Installing\u2026';
+        try {
+          const inst = await core.call('addons_install_github', { id: item.id });
+          showBanner(`Installed ${inst.name} v${inst.version} from GitHub.`, 'ok');
+          addons.refresh();
+          await render(true);
+          await loadCatalog(false);
+        } catch (e) {
+          showBanner(`Failed to install ${item.id}: ${e}`, 'err');
+          btn.disabled = false;
+          btn.textContent = btnLabel;
+        }
+      });
+      listWrap.append(h('div', { class: 'terra-cat-item' + (item.updateAvailable ? ' has-update' : '') },
+        h('div', { class: 'terra-info' },
+          h('div', { class: 'terra-name' },
+            item.name,
+            h('span', { class: 'terra-ver' }, item.updateAvailable ? `${item.installedVersion} \u2192 v${item.version}` : 'v' + item.version),
+            h('span', { class: 'terra-badge' }, item.category || 'Other'),
+            item.updateAvailable ? h('span', { class: 'terra-badge update' }, 'Update') : ''),
+          item.description ? h('div', { class: 'terra-desc' }, item.description) : ''),
+        btn));
+    };
+
+    if (filteredUpdates.length > 0) {
+      listWrap.append(h('div', { class: 'terra-cat-section updates' }, `Updates available (${filteredUpdates.length})`));
+      for (const item of filteredUpdates) appendItem(item);
+      if (filteredRest.length > 0) {
+        listWrap.append(h('div', { class: 'terra-cat-section' }, `Other catalog addons (${filteredRest.length})`));
+      }
+    }
+    for (const item of filteredRest) appendItem(item);
+  }
+
   async function loadCatalog(forceRefresh = false) {
     if (!catalogBox) return;
     catalogBox.hidden = false;
@@ -323,59 +498,19 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
       h('span', { class: 'terra-ver' }, 'Loading\u2026')));
     try {
       const items = await core.call('addons_catalog', { refresh: !!forceRefresh });
-      const refreshBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'Refresh');
-      refreshBtn.addEventListener('click', () => loadCatalog(true));
-      const closeCatBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'Hide');
-      closeCatBtn.addEventListener('click', () => { catalogOpen = false; catalogBox.hidden = true; });
-      const head = h('div', { class: 'terra-catalog-head' },
-        h('strong', {}, `GitHub Catalog (${items.length})`),
-        h('div', { style: 'display:flex;gap:6px;' }, refreshBtn, closeCatBtn));
-      catalogBox.replaceChildren(head);
-      if (!items.length) {
-        catalogBox.append(h('div', { class: 'terra-meta' }, 'No addons found in repository.'));
-        return;
-      }
-      for (const item of items) {
-        const isInstalled = !!item.installedVersion;
-        const btnLabel = item.updateAvailable
-          ? `Update (${item.installedVersion} \u2192 ${item.version})`
-          : isInstalled ? `Reinstall v${item.version}` : `Install v${item.version}`;
-        const btn = h('button', {
-          class: (item.updateAvailable || !isInstalled) ? 'terra-btn-primary terra-btn-sm' : 'terra-btn terra-btn-sm',
-          type: 'button',
-        }, btnLabel);
-        btn.addEventListener('click', async () => {
-          btn.disabled = true;
-          btn.textContent = 'Installing\u2026';
-          try {
-            const inst = await core.call('addons_install_github', { id: item.id });
-            showBanner(`Installed ${inst.name} v${inst.version} from GitHub.`, 'ok');
-            addons.refresh();
-            await render(true);
-            await loadCatalog(false);
-          } catch (e) {
-            showBanner(`Failed to install ${item.id}: ${e}`, 'err');
-            btn.disabled = false;
-            btn.textContent = btnLabel;
-          }
-        });
-        catalogBox.append(h('div', { class: 'terra-cat-item' },
-          h('div', { class: 'terra-info' },
-            h('div', { class: 'terra-name' },
-              item.name,
-              h('span', { class: 'terra-ver' }, 'v' + item.version),
-              h('span', { class: 'terra-badge' }, item.category || 'Other')),
-            item.description ? h('div', { class: 'terra-desc' }, item.description) : ''),
-          btn));
-      }
+      cachedCatalog = sortCatalogItems(items);
+      renderCatalogItems();
     } catch (e) {
       const retry = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'Retry');
       retry.addEventListener('click', () => loadCatalog(true));
+      const back = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, '\u2190 Back');
+      back.addEventListener('click', () => setCatalogOpen(false));
       catalogBox.replaceChildren(
         h('div', { class: 'terra-catalog-head' },
           h('strong', {}, 'GitHub Catalog'),
-          retry),
-        h('div', { class: 'terra-dd-error' }, 'Failed to fetch catalog: ' + e)
+          h('div', { class: 'terra-catalog-actions' }, retry, back)),
+        h('div', { class: 'terra-catalog-list' },
+          h('div', { class: 'terra-dd-error' }, 'Failed to fetch catalog: ' + e))
       );
     }
   }
@@ -595,6 +730,12 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     if (!overlay) return;
     overlay.remove();
     overlay = null;
+    modalEl = null;
+    catalogBtnEl = null;
+    searchInputEl = null;
+    paintChipsFn = null;
+    catalogOpen = false;
+    catalogBatchBusy = false;
     hidePreviews();
     removeEventListener('keydown', onKey, true);
   }
@@ -614,10 +755,9 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     });
 
     const catalogBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'GitHub Catalog');
+    catalogBtnEl = catalogBtn;
     catalogBtn.addEventListener('click', () => {
-      catalogOpen = !catalogOpen;
-      if (catalogOpen) loadCatalog(false);
-      else catalogBox.hidden = true;
+      setCatalogOpen(!catalogOpen);
     });
 
     const uploadBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button', title: 'Install an addon from a .zip file' }, 'Install .zip');
@@ -626,14 +766,18 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     const searchInput = h('input', {
       class: 'terra-search', type: 'search', placeholder: 'Search addons\u2026', value: searchQuery,
     });
+    searchInputEl = searchInput;
     searchInput.addEventListener('input', () => {
       searchQuery = searchInput.value;
-      render(false);
+      if (catalogOpen) renderCatalogItems();
+      else render(false);
     });
 
-    const cats = ['All', 'Enabled', 'HUD', 'Camera', 'Hardware', 'Export', 'Other'];
     const chipsRow = h('div', { class: 'terra-chips' });
     const paintChips = () => {
+      const cats = catalogOpen
+        ? ['All', 'Updates', 'HUD', 'Camera', 'Hardware', 'Export', 'Other']
+        : ['All', 'Enabled', 'HUD', 'Camera', 'Hardware', 'Export', 'Other'];
       chipsRow.replaceChildren(...cats.map((c) => {
         const b = h('button', {
           class: 'terra-chip' + (activeCategory === c ? ' active' : ''),
@@ -642,11 +786,13 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
         b.addEventListener('click', () => {
           activeCategory = c;
           paintChips();
-          render(false);
+          if (catalogOpen) renderCatalogItems();
+          else render(false);
         });
         return b;
       }));
     };
+    paintChipsFn = paintChips;
     paintChips();
 
     const toolbar = h('div', { class: 'terra-toolbar' },
@@ -712,6 +858,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
       fgBox,
       foot);
 
+    modalEl = modal;
     // Drag & drop .zip directly onto the modal
     modal.addEventListener('dragover', (e) => { e.preventDefault(); });
     modal.addEventListener('drop', (e) => {
