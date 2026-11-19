@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.1] — GitHub Catalog Redesign, Per-Addon Changelogs & Terra Settings UI
+
+### Added
+- **Per-addon changelog notes in GitHub Catalog** — `addons_catalog` now reads `<addon>/CHANGELOG.md` so addons with available updates automatically expand a "What's new" section for missing versions, and all other catalog entries include a collapsible `Changelog ▾` toggle.
+- **`Chat` & dynamic A–Z category chips** — added the `Chat` filter chip (and auto-discovery for any custom addon categories) with alphabetical sorting (`Other` last).
+
+### Changed
+- **Full-column GitHub Catalog** — switching to the GitHub Catalog now takes over the full modal body with updates pinned at the top (sorted A–Z) and a batch **Update all** button.
+- **Terra Settings UI polish** — renamed the modal from "Terra addons" to **Terra Settings**, made **Addons** (open by default, hosting `GitHub Catalog` and `Install .zip`) and **Data folder** (collapsed by default) collapsible cards alongside **Bluetooth devices** and **Frame Generation**, added `▸`/`▾` open/collapsed carets, and grouped the bottom utility panels in a distinct recessed tray.
+
 ## [0.11.0] — Performance Telemetry, Linux Frame Generation & Android Microphone Support
 
 ### Added
