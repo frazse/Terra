@@ -300,6 +300,13 @@ Both list devices via Rust `chooser_candidates` and confirm via `chooser_pick`.
    reassignment on lazy plate creation was a per-frame `TypeError` → fatal. Use `let`.
 2. **Avoid heavy CSS (notably `backdrop-filter`) in in-page overlays.** It broke the game
    GPU on the Vulkan/ANGLE stack. (Kept as a comment in `nameplates/style.css`.)
+   When styling new addons to match Biketerra's native HUD, reuse Biketerra's `:root`
+   tokens (`--font` Overpass, `--font-mono` Overpass Mono, `--sunk`, `--ground`,
+   `--surface`, `--raised`, `--line`, `--ink` / `--ink-2` / `--ink-3`, `--overlay-2..5`,
+   `--white-1..4`, `--focus` `#ffcd7c`, `--selected` / `--selected-line`, `--danger`,
+   `--radius-sm/md/lg`, `--shadow-lg`) and native HUD classes (`.list-pill.hud-pill.bg-dark`
+   in `.people-status`, or in-flow children inside `.road-middle`) instead of custom
+   `backdrop-filter` or off-palette Tailwind colors.
 3. **Shim order & world:** keep `bluetooth-shim → addons-loader → terra-ui` order, all in
    world 0 (main world), or `window.__terra` / `navigator.bluetooth` won't exist for
    addons or the page.
