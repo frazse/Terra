@@ -300,13 +300,19 @@ Both list devices via Rust `chooser_candidates` and confirm via `chooser_pick`.
    reassignment on lazy plate creation was a per-frame `TypeError` → fatal. Use `let`.
 2. **Avoid heavy CSS (notably `backdrop-filter`) in in-page overlays.** It broke the game
    GPU on the Vulkan/ANGLE stack. (Kept as a comment in `nameplates/style.css`.)
-   When styling new addons to match Biketerra's native HUD, reuse Biketerra's `:root`
-   tokens (`--font` Overpass, `--font-mono` Overpass Mono, `--sunk`, `--ground`,
-   `--surface`, `--raised`, `--line`, `--ink` / `--ink-2` / `--ink-3`, `--overlay-2..5`,
-   `--white-1..4`, `--focus` `#ffcd7c`, `--selected` / `--selected-line`, `--danger`,
-   `--radius-sm/md/lg`, `--shadow-lg`) and native HUD classes (`.list-pill.hud-pill.bg-dark`
-   in `.people-status`, or in-flow children inside `.road-middle`) instead of custom
-   `backdrop-filter` or off-palette Tailwind colors.
+   When styling new addons to match Biketerra's native UI, distinguish its two palettes
+   and avoid custom `backdrop-filter` or off-palette Tailwind colors:
+   - **In-ride HUD / Rider Stat panels** (`.panel`/`.glass`/`.bg-dark`, `.stats-grid`,
+     `.lap-counter`, `.road-readout`, `.people-status`): neutral dark translucent
+     `var(--overlay-4)` (`#0008`), **no border**, `border-radius: var(--radius-md)`,
+     pure `#fff` primary numerals (`--font-mono`, `1.4rem`, `font-weight: 700`,
+     `tabular-nums`), `var(--white-4)` units/controls, `var(--white-3)` subtle headers,
+     borderless hover buttons (`var(--white-1)` → `var(--white-2)`), `var(--success)` /
+     `var(--danger)` accents, and **100% `rem` dimensions** so widgets scale automatically
+     with Biketerra's Text Size setting (`html { font-size: var(--font-size) }`).
+   - **In-ride menus / popovers** (`.ride-menu`): warm plum `--sunk` / `--ground` /
+     `--surface` / `--raised`, `--line` borders, `--ink*` text, and warm gold `--focus`
+     (`#ffcd7c`) / `--selected` / `--selected-line`.
 3. **Shim order & world:** keep `bluetooth-shim → addons-loader → terra-ui` order, all in
    world 0 (main world), or `window.__terra` / `navigator.bluetooth` won't exist for
    addons or the page.
