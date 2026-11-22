@@ -409,7 +409,44 @@ async fn dispatch_rpc_command(
         "ride_push" => {
             let store: State<'_, crate::ride::Ride> = app.state();
             let data = args_val.get("data").cloned().unwrap_or(json!(null));
+            if let Some(hub) = app.try_state::<crate::tui_hub::TuiHub>() {
+                hub.publish_ride(&data);
+            }
             crate::ride::ride_push(store, data);
+            Ok(json!(null))
+        }
+
+        // Electron / tui-shim reports page/route/world/host updates for `terra --tui`.
+        // Linux-only (not needed on Tauri/Android).
+        "tui_page" => {
+            let url = args_val.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if let Some(hub) = app.try_state::<crate::tui_hub::TuiHub>() {
+                hub.set_page(url);
+            }
+            Ok(json!(null))
+        }
+
+        "tui_route" => {
+            let data = args_val.get("data").cloned().unwrap_or(json!(null));
+            if let Some(hub) = app.try_state::<crate::tui_hub::TuiHub>() {
+                hub.set_route(data);
+            }
+            Ok(json!(null))
+        }
+
+        "tui_world" => {
+            let data = args_val.get("data").cloned().unwrap_or(json!(null));
+            if let Some(hub) = app.try_state::<crate::tui_hub::TuiHub>() {
+                hub.set_world(data);
+            }
+            Ok(json!(null))
+        }
+
+        "tui_host_state" => {
+            let data = args_val.get("data").cloned().unwrap_or(json!(null));
+            if let Some(hub) = app.try_state::<crate::tui_hub::TuiHub>() {
+                hub.set_host_state(data);
+            }
             Ok(json!(null))
         }
 

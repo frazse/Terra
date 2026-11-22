@@ -37,18 +37,25 @@ try {
   let shimPath = path.join(rootDir, 'shim', 'bluetooth-shim.js');
   let loaderPath = path.join(rootDir, 'shim', 'addons-loader.js');
   let uiPath = path.join(rootDir, 'shim', 'terra-ui.js');
+  let tuiPath = path.join(rootDir, 'shim', 'tui-shim.js');
 
   if (!fs.existsSync(shimPath)) {
     shimPath = path.join(process.resourcesPath, 'shim', 'bluetooth-shim.js');
     loaderPath = path.join(process.resourcesPath, 'shim', 'addons-loader.js');
     uiPath = path.join(process.resourcesPath, 'shim', 'terra-ui.js');
+    tuiPath = path.join(process.resourcesPath, 'shim', 'tui-shim.js');
   }
 
   const shim = fs.readFileSync(shimPath, 'utf8');
   const loader = fs.readFileSync(loaderPath, 'utf8');
   const ui = fs.readFileSync(uiPath, 'utf8');
+  const tuiBoot = `window.__TERRA_TUI_BOOT__=${JSON.stringify({
+    tuiMode: process.env.TERRA_TUI === '1' || process.env.TERRA_HEADLESS === '1',
+    headless: process.env.TERRA_HEADLESS === '1',
+  })};`;
+  const tui = fs.existsSync(tuiPath) ? fs.readFileSync(tuiPath, 'utf8') : '';
 
-  const fullInit = `${shim}\n;\n${loader}\n;\n${ui}`;
+  const fullInit = `${shim}\n;\n${loader}\n;\n${ui}\n;\n${tuiBoot}\n${tui}`;
 
   // Execute in main world so page JS sees navigator.bluetooth and shims
   webFrame.executeJavaScriptInIsolatedWorld(0, [

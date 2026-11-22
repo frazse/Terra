@@ -437,9 +437,102 @@ if (process.platform === 'linux') {
   }
 }
 
+// Keep Chromium timers & renderers alive when hidden/occluded in TUI mode.
+const HEADLESS = process.env.TERRA_HEADLESS === '1';
+const TUI_MODE = process.env.TERRA_TUI === '1' || HEADLESS;
+if (TUI_MODE) {
+  app.commandLine.appendSwitch('disable-renderer-backgrounding');
+  app.commandLine.appendSwitch('disable-background-timer-throttling');
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+}
+
 let mainWindow;
 let rustProcess;
 let isQuitting = false;
+
+// Terminal UI (`terra --tui`, see src/tui/ + src/tui_hub.rs + shim/tui-shim.js).
+const tuiHostState = {
+  tuiMode: TUI_MODE,
+  clientCount: 0,
+  windowHidden: HEADLESS,
+  renderMode: 'auto', // 'auto' | 'off' | '1fps' | 'full'
+};
+
+function syncTuiHostState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const payload = JSON.stringify(tuiHostState);
+    mainWindow.webContents
+      .executeJavaScript(`window.__terraTui && window.__terraTui.setHostState(${payload})`, false)
+      .catch(() => {});
+  }
+  sendRpc('tui_host_state', {
+    data: {
+      windowHidden: tuiHostState.windowHidden,
+      renderMode: tuiHostState.renderMode,
+    }
+  }).catch(() => {});
+}
+
+function reportPageToTui() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    sendRpc('tui_page', { url: mainWindow.webContents.getURL() }).catch(() => {});
+  }
+}
+
+// Whitelisted commands from the TUI, relayed by the backend as {event:'tui_cmd', ...}.
+function handleTuiCommand(msg) {
+  if (msg.cmd === 'client_count') {
+    tuiHostState.clientCount = Number(msg.count) || 0;
+    if (tuiHostState.clientCount > 0 && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.setBackgroundThrottling(false);
+    }
+    syncTuiHostState();
+    return;
+  }
+  if (msg.cmd === 'render_mode') {
+    if (['auto', 'off', '1fps', 'full'].includes(msg.mode)) {
+      tuiHostState.renderMode = msg.mode;
+      syncTuiHostState();
+    }
+    return;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wc = mainWindow.webContents;
+  switch (msg.cmd) {
+    case 'window': {
+      const show = msg.action === 'show' || (msg.action === 'toggle' && !mainWindow.isVisible());
+      if (show) {
+        tuiHostState.windowHidden = false;
+        mainWindow.show();
+        mainWindow.focus();
+      } else {
+        // Hidden windows are throttled by default; keep throttling off and switch rAF to timer pump.
+        wc.setBackgroundThrottling(false);
+        tuiHostState.windowHidden = true;
+        mainWindow.hide();
+      }
+      syncTuiHostState();
+      break;
+    }
+    case 'navigate': {
+      try {
+        const u = new URL(String(msg.path || '/'), 'https://biketerra.com');
+        if (u.origin === 'https://biketerra.com') mainWindow.loadURL(u.href);
+      } catch {}
+      break;
+    }
+    case 'reload':
+      wc.reload();
+      break;
+    case 'focus_rider': {
+      const idJson = JSON.stringify(msg.id != null ? String(msg.id) : '');
+      const nameJson = JSON.stringify(msg.name != null ? String(msg.name) : '');
+      wc.executeJavaScript(`window.__terraTui && window.__terraTui.focusRider(${idJson}, ${nameJson})`, false)
+        .catch(() => {});
+      break;
+    }
+  }
+}
 let shutdownPromise = null;
 let reqId = 1;
 let powerBlockerId = null;
@@ -494,6 +587,8 @@ function startRustProcess() {
           else resolve(msg.result);
         } else if (msg.event === 'js_eval' && msg.code && mainWindow) {
           mainWindow.webContents.executeJavaScript(msg.code).catch(() => {});
+        } else if (msg.event === 'tui_cmd') {
+          handleTuiCommand(msg);
         } else if (msg.event && mainWindow) {
           mainWindow.webContents.send('rust-event', msg);
         } else {
@@ -528,6 +623,10 @@ function startRustProcess() {
   rustProcess.on('error', (err) => {
     console.error('[electron] Rust process error:', err);
   });
+
+  // A respawned backend starts with no page URL; re-seed the TUI feed.
+  reportPageToTui();
+  syncTuiHostState();
 }
 
 // Send one command to the Rust backend over stdio. Resolves with the result,
@@ -857,15 +956,23 @@ function createWindow() {
     height: 900,
     title: 'Terra',
     autoHideMenuBar: true,
+    show: !HEADLESS,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
       webSecurity: true,
-      experimentalFeatures: true
+      experimentalFeatures: true,
+      backgroundThrottling: !TUI_MODE
     }
   });
+  if (HEADLESS) console.log('[electron] TERRA_HEADLESS=1: window hidden; use `terra --tui` (w toggles it)');
+
+  mainWindow.on('show', () => { tuiHostState.windowHidden = false; syncTuiHostState(); });
+  mainWindow.on('hide', () => { tuiHostState.windowHidden = true; syncTuiHostState(); });
+  mainWindow.on('minimize', () => { tuiHostState.windowHidden = true; syncTuiHostState(); });
+  mainWindow.on('restore', () => { tuiHostState.windowHidden = false; syncTuiHostState(); });
 
   mainWindow.setMenu(null);
 
@@ -896,6 +1003,8 @@ function createWindow() {
   const onNav = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     syncFramegenForUrl(mainWindow.webContents.getURL());
+    reportPageToTui();
+    syncTuiHostState();
     arm();
   };
   // Full loads AND SPA navigations: the game chunk is lazy, and only loads

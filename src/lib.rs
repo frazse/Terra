@@ -11,6 +11,10 @@ mod linux_runtime;
 mod rpc;
 #[cfg(target_os = "linux")]
 mod lib_linux;
+#[cfg(target_os = "linux")]
+mod tui_hub;
+#[cfg(target_os = "linux")]
+mod tui;
 #[cfg(not(target_os = "linux"))]
 mod lib_tauri;
 

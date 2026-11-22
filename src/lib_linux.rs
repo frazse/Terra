@@ -3,6 +3,15 @@
 use crate::linux_runtime::AppHandle;
 
 pub fn run() {
+    // Terminal UI client: attaches to a running backend's socket; never touches app state.
+    if std::env::args().any(|a| a == "--tui") {
+        if let Err(e) = crate::tui::run() {
+            eprintln!("[terra] tui: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let app = AppHandle::new();
 
     // Initialize addon store
@@ -20,6 +29,9 @@ pub fn run() {
 
     // Performance telemetry sampler (terra.perf)
     app.manage(crate::perf::PerfState::new());
+
+    // Feed for the terminal UI (`terra --tui`)
+    app.manage(crate::tui_hub::TuiHub::new());
 
     // Log addon directories and loaded addons
     for dir in crate::addons::addon_dirs(&app) {
@@ -52,8 +64,12 @@ pub fn run() {
                 };
                 app_handle.manage(ble);
 
-                // Run RPC server (blocks forever)
+                // Local socket for `terra --tui` clients (best-effort).
+                tokio::spawn(crate::tui_hub::serve(app_handle.clone()));
+
+                // Run RPC server (blocks until stdin closes)
                 crate::rpc::run_rpc_server(app_handle).await;
+                crate::tui_hub::cleanup();
             });
     }
     // In non-RPC mode on Linux, the process just exits (Electron handles the UI).
