@@ -5,9 +5,9 @@
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use tauri::State;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::linux_runtime::State;
 
 /// How many frames to keep (about five minutes at 2Hz).
@@ -59,17 +59,17 @@ impl Ride {
     }
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn ride_push(state: State<'_, Ride>, data: Value) {
     state.push(data);
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn ride_latest(state: State<'_, Ride>) -> Option<Value> {
     state.latest()
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn ride_history(state: State<'_, Ride>, limit: Option<usize>) -> Vec<Value> {
     state.history(limit)
 }

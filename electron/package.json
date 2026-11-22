@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --linux appimage"
+    "dist": "electron-builder --linux appimage",
+    "dist:win": "electron-builder --win"
   },
   "author": "frazse",
   "license": "MIT",
@@ -22,8 +23,12 @@
     },
     "extraResources": [
       {
-        "from": "../target/release/terra",
-        "to": "bin/terra"
+        "from": "../target/release",
+        "to": "bin",
+        "filter": [
+          "terra",
+          "terra.exe"
+        ]
       },
       {
         "from": "../shim",
@@ -40,6 +45,27 @@
       ],
       "icon": "../icons/icon.png",
       "category": "Sports"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "../icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   },
   "allowScripts": {

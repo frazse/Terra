@@ -16,9 +16,9 @@ use std::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use tauri::{AppHandle, Manager as _, State};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::linux_runtime::{AppHandle, State};
 use tokio::{
     sync::{oneshot, Mutex},
@@ -36,14 +36,14 @@ use btleplug::platform::{Adapter, Manager, Peripheral};
 #[cfg(not(target_os = "android"))]
 use futures::StreamExt;
 
-/// Platform-agnostic task spawn (tauri on non-Linux, tokio on Linux).
-#[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
+/// Platform-agnostic task spawn (tokio on Linux/Windows RPC mode, tauri elsewhere).
+#[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
 use tauri::async_runtime::spawn as spawn_task;
-#[cfg(all(not(target_os = "android"), target_os = "linux"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::linux_runtime::async_runtime::spawn as spawn_task;
-#[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
+#[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
 use tauri::{async_runtime::JoinHandle, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-#[cfg(all(not(target_os = "android"), target_os = "linux"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::linux_runtime::async_runtime::JoinHandle;
 #[cfg(not(target_os = "android"))]
 use tokio::time::sleep;
@@ -125,7 +125,7 @@ fn describe(chr: &Uuid, b: &[u8]) -> String {
 }
 
 /// Call `window.__terra.<func>(...args)` in the biketerra webview.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn js(app: &AppHandle, func: &str, args: Vec<Value>) {
     let a: Vec<String> = args.iter().map(|v| v.to_string()).collect();
     let code = format!("window.__terra && window.__terra.{func}({})", a.join(","));
@@ -134,8 +134,8 @@ fn js(app: &AppHandle, func: &str, args: Vec<Value>) {
     }
 }
 
-/// On Linux (RPC mode), writes a js_eval event to stdout for main.js to handle.
-#[cfg(target_os = "linux")]
+/// On Linux/Windows (RPC mode), writes a js_eval event to stdout for main.js to handle.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn js(app_opt: Option<&AppHandle>, func: &str, args: Vec<Value>) {
     let a: Vec<String> = args.iter().map(|v| v.to_string()).collect();
     let code = format!("window.__terra && window.__terra.{func}({})", a.join(","));
@@ -383,9 +383,9 @@ impl Broker {
             .next()
             .ok_or("no bluetooth adapter found")?;
 
-        #[cfg(target_os = "linux")]
-        let dir = crate::linux_runtime::xdg_data_home().join("terra");
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        let dir = crate::linux_runtime::terra_data_dir();
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let dir = app.as_ref().unwrap().path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
         let _ = std::fs::create_dir_all(&dir);
         let store = dir.join("devices.json");
@@ -833,7 +833,7 @@ impl Broker {
         Ok(info)
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     fn open_chooser(self: &Arc<Self>) -> Result<(), String> {
         let win = WebviewWindowBuilder::new(self.app.as_ref().unwrap(), "chooser", WebviewUrl::App("chooser.html".into()))
             .title("Select Bluetooth device")
@@ -850,7 +850,7 @@ impl Broker {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn open_chooser(&self) -> Result<(), String> {
         // On Linux (RPC mode), use js() which writes a js_eval event to stdout.
         // main.js handles js_eval by executing JS directly in the webview.
@@ -1388,10 +1388,11 @@ struct RawDiscoveredDevice {
 /// Resolve the Terra storage directory.
 /// On Android: uses the app's external files dir.
 /// On Linux: uses XDG data home (`~/.local/share/terra`).
+/// On Windows: uses `%LOCALAPPDATA%\terra`.
 /// On other platforms: uses Tauri's app_data_dir.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn get_terra_storage_dir() -> PathBuf {
-    let dir = crate::linux_runtime::xdg_data_home().join("terra");
+    let dir = crate::linux_runtime::terra_data_dir();
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::create_dir_all(dir.join("addons"));
     let _ = std::fs::create_dir_all(dir.join("addon-data"));
@@ -1437,7 +1438,7 @@ pub(crate) fn android_internal_files_dir(app: &AppHandle) -> Option<PathBuf> {
         .or_else(|| app.path().app_data_dir().ok())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn get_terra_storage_dir(app: &AppHandle) -> PathBuf {
     #[cfg(target_os = "android")]
     {
@@ -1887,7 +1888,7 @@ impl Broker {
 }
 
 /// Failed GATT commands are always printed (they used to vanish: the page just saw a rejected promise).
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 fn logged<T>(what: &str, id: &str, r: Result<T, String>) -> Result<T, String> {
     if let Err(e) = &r {
         eprintln!("[ble] {what} {id} FAILED: {e}");
@@ -1904,8 +1905,8 @@ pub fn broker<'a>(s: &'a State<'_, Ble>) -> Result<&'a Arc<Broker>, String> {
     s.0.as_ref().ok_or_else(|| "no bluetooth adapter available".to_string())
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_request_device(
     state: State<'_, Ble>,
     filters: Vec<Filter>,
@@ -1920,8 +1921,8 @@ pub async fn ble_request_device(
 }
 
 /// Devices an addon paired earlier (so it can restore them without any UI).
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_remembered(state: State<'_, Ble>, owner: String) -> Result<Vec<DeviceInfo>, String> {
     let b = broker(&state)?;
     let known = b.known.lock().await;
@@ -1934,8 +1935,8 @@ pub async fn ble_remembered(state: State<'_, Ble>, owner: String) -> Result<Vec<
 
 /// Let the page (not just the owning addon) use the owner's devices, e.g. so Biketerra's own
 /// Zwift Ride support can take the controller during rides. Not persisted: addons set it per page load.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_release(state: State<'_, Ble>, owner: String, released: bool) -> Result<(), String> {
     let b = broker(&state)?;
     let mut r = b.released.lock().await;
@@ -1947,58 +1948,58 @@ pub async fn ble_release(state: State<'_, Ble>, owner: String, released: bool) -
     Ok(())
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_connect(state: State<'_, Ble>, id: String) -> Result<Vec<ServiceInfo>, String> {
     let r = broker(&state)?.connect(&id).await;
     logged("connect", &id, r)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_disconnect(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.disconnect(&id).await
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_disconnect_all(state: State<'_, Ble>) -> Result<(), String> {
     broker(&state)?.disconnect_all().await
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_forget(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.forget(&id).await
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_devices_status(state: State<'_, Ble>) -> Result<Vec<BleDeviceStatus>, String> {
     Ok(broker(&state)?.devices_status().await)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_drop_device(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.drop_device(&id).await
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_drop_all(state: State<'_, Ble>) -> Result<(), String> {
     broker(&state)?.drop_all().await
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_read(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<String, String> {
     let r = broker(&state)?.read(&id, &service, &characteristic).await;
     logged(&format!("read {characteristic}"), &id, r)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_write(
     state: State<'_, Ble>,
     id: String,
@@ -2011,35 +2012,35 @@ pub async fn ble_write(
     logged(&format!("write {characteristic}"), &id, r)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_subscribe(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<(), String> {
     let r = broker(&state)?.subscribe(&id, &service, &characteristic, true).await;
     logged(&format!("subscribe {characteristic}"), &id, r)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn ble_unsubscribe(state: State<'_, Ble>, id: String, service: String, characteristic: String) -> Result<(), String> {
     let r = broker(&state)?.subscribe(&id, &service, &characteristic, false).await;
     logged(&format!("unsubscribe {characteristic}"), &id, r)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn chooser_candidates(state: State<'_, Ble>) -> Result<Vec<Candidate>, String> {
     Ok(broker(&state)?.candidates().await)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn chooser_pick(state: State<'_, Ble>, id: String) -> Result<(), String> {
     broker(&state)?.resolve(Some(id)).await;
     Ok(())
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub async fn chooser_cancel(state: State<'_, Ble>) -> Result<(), String> {
     broker(&state)?.resolve(None).await;
     Ok(())

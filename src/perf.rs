@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use tauri::State;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::linux_runtime::State;
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -223,7 +223,7 @@ impl PerfState {
     }
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn perf_stats(state: State<'_, PerfState>) -> Result<Value, String> {
     let sampler = (*state).clone();
     let stats = tokio::task::spawn_blocking(move || sampler.sample())

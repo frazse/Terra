@@ -11,9 +11,9 @@
 
 use std::path::PathBuf;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use tauri::AppHandle;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::linux_runtime::AppHandle;
 
 // ─── JNI helpers (Android only) ──────────────────────────────────────────────
@@ -98,7 +98,7 @@ pub(crate) fn call_main_activity_str_pub(method: &str) -> Result<String, String>
 
 /// Open the Android folder picker. Blocks (async) until the user picks, cancels,
 /// or a 10-minute timeout elapses.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn terra_pick_data_dir() -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     {
@@ -157,7 +157,7 @@ pub async fn terra_pick_data_dir() -> Result<serde_json::Value, String> {
 }
 
 /// Return the current data directory info.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn terra_data_dir_status(app: AppHandle) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     {
@@ -178,7 +178,7 @@ pub fn terra_data_dir_status(app: AppHandle) -> Result<serde_json::Value, String
         }))
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         let _ = app;
         Ok(serde_json::json!({
@@ -189,7 +189,7 @@ pub fn terra_data_dir_status(app: AppHandle) -> Result<serde_json::Value, String
         }))
     }
 
-    #[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
+    #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
     {
         let dir = crate::ble::get_terra_storage_dir(&app);
         Ok(serde_json::json!({
@@ -202,7 +202,7 @@ pub fn terra_data_dir_status(app: AppHandle) -> Result<serde_json::Value, String
 }
 
 /// Mark the Android first-launch data-folder prompt as dismissed so it won't reappear on launch.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn terra_dismiss_data_dir_prompt(app: AppHandle) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     {
@@ -223,20 +223,20 @@ pub fn terra_dismiss_data_dir_prompt(app: AppHandle) -> Result<serde_json::Value
 
 /// Wipe all Terra data (addons/, addon-data/, devices.json) from the current data dir.
 /// The caller (UI) MUST confirm with the user before invoking this.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn terra_reset_all_data(app: AppHandle) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     {
         do_reset(crate::ble::get_terra_storage_dir(&app))
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         let _ = app;
         do_reset(crate::ble::get_terra_storage_dir())
     }
 
-    #[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
+    #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
     {
         do_reset(crate::ble::get_terra_storage_dir(&app))
     }

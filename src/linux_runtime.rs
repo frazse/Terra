@@ -134,10 +134,12 @@ static PACKAGE_INFO: std::sync::LazyLock<PackageInfo> = std::sync::LazyLock::new
 
 // ---------- Path helpers ----------
 
+#[cfg(target_os = "linux")]
 pub fn xdg_home() -> PathBuf {
     std::env::var("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
+#[cfg(target_os = "linux")]
 pub fn xdg_data_home() -> PathBuf {
     std::env::var("XDG_DATA_HOME")
         .ok()
@@ -147,6 +149,7 @@ pub fn xdg_data_home() -> PathBuf {
         .unwrap_or_default()
 }
 
+#[cfg(target_os = "linux")]
 fn xdg_download_dir() -> PathBuf {
     std::env::var("XDG_DOWNLOAD_DIR")
         .ok()
@@ -154,6 +157,44 @@ fn xdg_download_dir() -> PathBuf {
         .filter(|p| !p.as_os_str().is_empty())
         .or_else(|| Some(xdg_home().join("Downloads")))
         .unwrap_or_default()
+}
+
+pub fn terra_data_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        xdg_data_home().join("terra")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        dirs::data_local_dir()
+            .or_else(dirs::data_dir)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("terra")
+    }
+}
+
+fn default_download_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        xdg_download_dir()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+fn default_home_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        xdg_home()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 // ---------- PathProvider ----------
@@ -164,15 +205,15 @@ static PATH_PROVIDER: std::sync::LazyLock<PathProvider> = std::sync::LazyLock::n
 
 impl PathProvider {
     pub fn app_data_dir(&self) -> Result<PathBuf, String> {
-        Ok(xdg_data_home().join("terra"))
+        Ok(terra_data_dir())
     }
 
     pub fn download_dir(&self) -> Result<PathBuf, String> {
-        Ok(xdg_download_dir())
+        Ok(default_download_dir())
     }
 
     pub fn home_dir(&self) -> Result<PathBuf, String> {
-        Ok(xdg_home())
+        Ok(default_home_dir())
     }
 }
 
@@ -182,7 +223,7 @@ pub struct WebviewWindow;
 
 impl WebviewWindow {
     pub fn eval(&self, _code: String) -> Result<(), String> {
-        Err("no webview on Linux (RPC mode)".into())
+        Err("no webview in desktop RPC mode".into())
     }
 
     pub fn close(&self) -> Result<(), String> {

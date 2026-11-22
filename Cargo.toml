@@ -27,7 +27,7 @@ crc32fast = "1"
 tauri = { version = "2", features = ["custom-protocol"] }
 jni = "0.21"
 
-[target.'cfg(not(any(target_os="android", target_os="linux")))'.dependencies]
+[target.'cfg(not(any(target_os="android", target_os="linux", target_os="windows")))'.dependencies]
 tauri = { version = "2", features = [] }
 
 

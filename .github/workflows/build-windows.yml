@@ -1,0 +1,38 @@
+name: Build Windows x64
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust Backend
+        run: cargo build --release
+
+      - name: Build Electron Windows Installers
+        shell: pwsh
+        run: |
+          cd electron
+          npm install
+          npm run dist:win
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Terra-Windows-x64
+          path: electron/dist/*.exe

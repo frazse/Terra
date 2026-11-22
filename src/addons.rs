@@ -17,9 +17,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use tauri::{AppHandle, Manager, State};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::linux_runtime::{AppHandle, State};
 
 #[derive(Deserialize)]
@@ -154,7 +154,7 @@ fn glob(pat: &str, text: &str) -> bool {
 }
 
 /// `TERRA_ADDONS_DIR` (path list) overrides; default is `<app data>/addons` and `./addons`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn addon_dirs(_app: &AppHandle) -> Vec<PathBuf> {
     if let Some(v) = std::env::var_os("TERRA_ADDONS_DIR") {
         return std::env::split_paths(&v).collect();
@@ -168,7 +168,7 @@ pub fn addon_dirs(_app: &AppHandle) -> Vec<PathBuf> {
     d
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn addon_dirs(app: &AppHandle) -> Vec<PathBuf> {
     if let Some(v) = std::env::var_os("TERRA_ADDONS_DIR") {
         return std::env::split_paths(&v).collect();
@@ -276,9 +276,9 @@ fn writable_addons_dir(app: &AppHandle) -> PathBuf {
         }
     }
     let _ = app;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     let dir = crate::ble::get_terra_storage_dir();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let dir = crate::ble::get_terra_storage_dir(app);
     dir.join("addons")
 }
@@ -330,7 +330,7 @@ pub struct Activation {
 
 /// Called by the page loader on load and on every URL change. Rescans the addon folders (so edits
 /// apply on reload), evaluates addons that now match, and reports addons that should be stopped.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addons_activate(app: AppHandle, url: String, active: Vec<String>) -> Activation {
     let addons = load_all(&app);
     let mut res = Activation { started: vec![], stop: vec![], scripts: vec![] };
@@ -500,19 +500,19 @@ impl AddonStore {
     }
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn addon_storage_get(store: State<'_, AddonStore>, id: String, key: String) -> Result<Option<Value>, String> {
     store.access(&id, false, |m| m.get(&key).cloned())
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn addon_storage_set(store: State<'_, AddonStore>, id: String, key: String, value: Value) -> Result<(), String> {
     store.access(&id, true, |m| {
         m.insert(key, value);
     })
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn addon_storage_remove(store: State<'_, AddonStore>, id: String, key: String) -> Result<(), String> {
     store.access(&id, true, |m| {
         m.remove(&key);
@@ -545,7 +545,7 @@ pub struct AddonList {
     addons: Vec<AddonInfo>,
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addons_list(app: AppHandle) -> AddonList {
     let dirs = addon_dirs(&app);
     let user_dir = writable_addons_dir(&app);
@@ -577,7 +577,7 @@ pub async fn addons_list(app: AppHandle) -> AddonList {
     }
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub fn addons_set_enabled(store: State<'_, AddonStore>, id: String, enabled: bool) -> Result<(), String> {
     store.set_enabled(&id, enabled)
 }
@@ -593,7 +593,7 @@ pub struct SettingsView {
     secrets_set: Vec<String>,
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_settings_get(app: AppHandle, store: State<'_, AddonStore>, id: String) -> Result<SettingsView, String> {
     let addons = load_manifests(&app);
     let a = addons.iter().find(|a| a.id == id).ok_or("unknown addon")?;
@@ -661,7 +661,7 @@ fn validate_setting_value(d: &SettingDef, value: &Value) -> Result<Option<Value>
 }
 
 /// An empty string or null removes the value (the manifest default applies again).
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_settings_set(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -687,7 +687,7 @@ pub async fn addon_settings_set(
     })
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_settings_reset(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -719,7 +719,7 @@ pub struct ImportResult {
     pub storage_count: usize,
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_settings_export(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -743,7 +743,7 @@ pub async fn addon_settings_export(
     })
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_settings_import(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -1091,7 +1091,7 @@ pub struct UninstallResult {
     pub still_present: bool,
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addons_catalog(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -1157,7 +1157,7 @@ pub async fn addons_catalog(
     Ok(items)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addons_install_github(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -1194,7 +1194,7 @@ pub async fn addons_install_github(
     Ok(InstalledAddon { id, name, version })
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addons_install_zip(
     app: AppHandle,
     base64: String,
@@ -1291,7 +1291,7 @@ pub async fn addons_install_zip(
     Ok(installed)
 }
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addons_uninstall(app: AppHandle, id: String) -> Result<UninstallResult, String> {
     if !valid_id(&id) {
         return Err("invalid addon id".into());
@@ -1367,7 +1367,7 @@ fn http_client() -> Result<&'static reqwest::Client, String> {
 
 /// https only, and only to hosts in the addon's manifest `connect` list. `{{setting:KEY}}` placeholders in the
 /// url, header values, body, basic auth and form fields are filled in here from the addon's settings.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: String, req: HttpReq) -> Result<HttpResp, String> {
     let addons = load_manifests(&app);
     let a = addons
@@ -1428,7 +1428,7 @@ pub async fn addon_http(app: AppHandle, store: State<'_, AddonStore>, addon: Str
 
 // ---------- terra.files: save a file to Downloads/Terra (the webview can't do <a download>) ----------
 
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_save_file(app: AppHandle, addon: String, filename: String, base64: String) -> Result<String, String> {
     if !load_manifests(&app).iter().any(|a| a.id == addon && a.enabled) {
         return Err("unknown or disabled addon".into());
@@ -1481,7 +1481,7 @@ async fn udp_socket(ipv4: bool) -> Result<&'static tokio::net::UdpSocket, String
 
 /// Send a single UDP datagram to `host:port` (or `hostname:port`). `{{setting:KEY}}` placeholders in
 /// `target` are expanded from the addon's settings. Resolves to the number of bytes sent.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_udp_send(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -1619,7 +1619,7 @@ fn require_addon(app: &AppHandle, addon: &str, enabled_only: bool) -> Result<(),
 /// `{{setting:KEY}}` placeholders in `host` expand from the addon's settings;
 /// `timeout_ms` 0 = 3 s. Inbound bytes arrive as `tcp:rx:<addon>` events `{conn, b64}`;
 /// lifecycle as `tcp:state:<addon>` events `{conn, state, reason?}`.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_tcp_connect(
     app: AppHandle,
     store: State<'_, AddonStore>,
@@ -1713,7 +1713,7 @@ pub async fn addon_tcp_connect(
 }
 
 /// Write raw bytes (base64) onto connection `conn`; resolves to the byte count.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_tcp_send(
     app: AppHandle,
     addon: String,
@@ -1732,7 +1732,7 @@ pub async fn addon_tcp_send(
 }
 
 /// List this addon's open connections (diagnostics).
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_tcp_list(
     app: AppHandle,
     addon: String,
@@ -1751,7 +1751,7 @@ pub async fn addon_tcp_list(
 /// keep their session slot latched, refusing every later connect (os error
 /// 111). Aborting is FIN-safe: the reader continuously drains, so no unread
 /// data means no reset.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn addon_tcp_close(
     app: AppHandle,
     addon: String,

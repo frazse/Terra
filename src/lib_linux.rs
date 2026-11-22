@@ -1,4 +1,4 @@
-//! Linux entry point: lightweight runtime without Tauri (no webkit2gtk/GTK).
+//! Desktop RPC entry point (Linux & Windows): lightweight runtime without Tauri.
 
 use crate::linux_runtime::AppHandle;
 

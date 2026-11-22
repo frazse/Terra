@@ -1,7 +1,7 @@
 fn main() {
-    // Skip Tauri build steps on Linux (RPC mode only, no webview)
+    // Skip Tauri build steps on desktop RPC targets (Linux & Windows, no Tauri webview)
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target_os == "linux" {
+    if target_os == "linux" || target_os == "windows" {
         return;
     }
 

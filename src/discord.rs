@@ -30,31 +30,31 @@
 //! connection flag, and the most recent outcome are retained, for
 //! `discord_status`.
 //!
-//! Linux for now (Discord desktop exposes a Unix socket). Other platforms return
-//! a clear "not available" error so the addon degrades gracefully.
+//! Linux (Unix domain sockets) and Windows (named pipes `\\.\pipe\discord-ipc-0..9`).
+//! Other platforms return a clear "not available" error so the addon degrades gracefully.
 
 use std::sync::{Arc, Mutex};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use tauri::{AppHandle, State};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::linux_runtime::{AppHandle, State};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const OP_HANDSHAKE: u32 = 0;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const OP_FRAME: u32 = 1;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const OP_PING: u32 = 3;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const OP_PONG: u32 = 4;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const SOCKET_NAMES: u32 = 10; // discord-ipc-0 .. discord-ipc-9
 
 /// One held-open IPC connection to Discord, shared by all pushes.
@@ -63,7 +63,7 @@ const SOCKET_NAMES: u32 = 10; // discord-ipc-0 .. discord-ipc-9
 /// underlying socket; commands hand it a `WriteReq` and get the correlated
 /// response back on the matching oneshot. `alive` is cleared by the owner the
 /// moment the socket drops, so the next call re-establishes a fresh session.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(Clone)]
 struct ConnectionHandle {
     write_tx: tokio::sync::mpsc::Sender<WriteReq>,
@@ -73,7 +73,7 @@ struct ConnectionHandle {
 
 /// A single SET_ACTIVITY request handed to the connection owner, plus the channel
 /// the correlated response is returned on.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 struct WriteReq {
     client_id: String,
     nonce: String,
@@ -82,7 +82,7 @@ struct WriteReq {
 }
 
 /// Send one command over the held connection and await its response.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl ConnectionHandle {
     async fn send_set(&self, client_id: &str, activity: Option<&Value>) -> Result<Value, String> {
         if !self.alive.load(Ordering::SeqCst) {
@@ -118,11 +118,11 @@ struct Inner {
     // Serialises SET_ACTIVITY calls so concurrent pushes (the ride-detect path and
     // the 5 s loop firing the same tick) don't both try to establish at once.
     // tokio's Mutex (not std's) so the guard can be held across an await.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     send: tokio::sync::Mutex<()>,
     // The one live connection, held open across pushes (see module doc). `None`
     // means "not connected / dropped" — the next call re-establishes.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     conn: tokio::sync::Mutex<Option<ConnectionHandle>>,
 }
 
@@ -133,9 +133,9 @@ impl Discord {
                 last_user: Mutex::new(None),
                 last_error: Mutex::new(None),
                 last_ok: Mutex::new(false),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 send: tokio::sync::Mutex::new(()),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 conn: tokio::sync::Mutex::new(None),
             }),
         }
@@ -145,7 +145,7 @@ impl Discord {
         &self.inner
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn note(&self, user: Option<String>, ok: bool, err: Option<String>) {
         let inner = self.inner();
         if let Some(u) = user {
@@ -160,7 +160,7 @@ impl Discord {
 
 /// Push (or update) the presence for the app whose Client ID is in `clientId`.
 /// `activity` carries `details`, `state`, `start`, image keys and `buttons`.
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn discord_set_activity(
     app: AppHandle,
     st: State<'_, Discord>,
@@ -175,21 +175,21 @@ pub async fn discord_set_activity(
         .ok_or_else(|| {
             "missing clientId (set the addon's \"Discord application Client ID\")".to_string()
         })?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         return set_activity(&*st, &cid, Some(sanitize(&activity))).await;
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = (st, cid, activity);
         return Err(
-            "Discord Rich Presence isn't available on this platform yet (Linux only)".into(),
+            "Discord Rich Presence isn't available on this platform yet (desktop only)".into(),
         );
     }
 }
 
 /// Drop the presence for the app `clientId` (activity = null).
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn discord_clear_activity(
     app: AppHandle,
     st: State<'_, Discord>,
@@ -200,23 +200,23 @@ pub async fn discord_clear_activity(
     if cid.is_empty() {
         return Err("missing clientId".into());
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         LOCKED_START_SEC.store(0, Ordering::SeqCst);
         return set_activity(&*st, &cid, None).await;
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = st;
         return Err(
-            "Discord Rich Presence isn't available on this platform yet (Linux only)".into(),
+            "Discord Rich Presence isn't available on this platform yet (desktop only)".into(),
         );
     }
 }
 
 /// Last known Discord state (who we logged in as, whether we hold a live
 /// connection, and the most recent error).
-#[cfg_attr(not(target_os = "linux"), tauri::command)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 pub async fn discord_status(app: AppHandle, st: State<'_, Discord>) -> Result<Value, String> {
     let _ = app;
     let inner = (&*st).inner();
@@ -224,29 +224,29 @@ pub async fn discord_status(app: AppHandle, st: State<'_, Discord>) -> Result<Va
     let last_error = inner.last_error.lock().unwrap().clone();
     let ok = *inner.last_ok.lock().unwrap();
     let connected = {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
             let g = inner.conn.lock().await;
             g.as_ref()
                 .map(|c| c.alive.load(Ordering::SeqCst))
                 .unwrap_or(false)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         false
     };
     Ok(json!({ "ok": ok, "user": last_user, "connected": connected, "lastError": last_error }))
 }
 
-// --------------------------------------------------- protocol (Linux) core
+// --------------------------------------------------- protocol (desktop) core
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn next_nonce() -> String {
     use std::sync::atomic::{AtomicU64, Ordering as Seq};
     static N: AtomicU64 = AtomicU64::new(0);
     format!("terra-rpc-{}", N.fetch_add(1, Seq::SeqCst))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn encode_frame(op: u32, body: &Value) -> Vec<u8> {
     let payload = serde_json::to_vec(body).unwrap_or_default();
     let mut buf = Vec::with_capacity(8 + payload.len());
@@ -256,7 +256,7 @@ fn encode_frame(op: u32, body: &Value) -> Vec<u8> {
     buf
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn error_message(body: &Value) -> String {
     if let Some(err) = body.get("error") {
         if let Some(m) = err.get("message").and_then(|x| x.as_str()) {
@@ -273,7 +273,7 @@ fn error_message(body: &Value) -> String {
     "Discord rejected the activity update".to_string()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Resolve (fail) every command still awaiting a response.
 fn fail_pending(
     pending: &mut std::collections::HashMap<String, tokio::sync::oneshot::Sender<Result<Value, String>>>,
@@ -287,10 +287,10 @@ fn fail_pending(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 static LOCKED_START_SEC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Trim/normalize the addon's activity into what Discord's SET_ACTIVITY wants.
 fn sanitize(v: &Value) -> Value {
     use serde_json::Map;
@@ -369,7 +369,7 @@ fn sanitize(v: &Value) -> Value {
     Value::Object(a)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Read exactly one framed message off an async reader. Kept generic so it works
 /// on both a full `UnixStream` (during handshake) and a split `ReadHalf` (the
 /// owner loop).
@@ -476,59 +476,107 @@ fn candidate_paths() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+#[cfg(target_os = "windows")]
+fn candidate_paths() -> Vec<std::path::PathBuf> {
+    (0..SOCKET_NAMES)
+        .map(|i| std::path::PathBuf::from(format!(r"\\.\pipe\discord-ipc-{i}")))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+type IpcStream = tokio::net::UnixStream;
+#[cfg(target_os = "windows")]
+type IpcStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+enum OpenErr {
+    NotFound,
+    Retryable(String),
+    Terminal(String),
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+enum ConnectErr {
+    NotFound,
+    Failed(String),
+}
+
 #[cfg(target_os = "linux")]
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const HANDSHAKE_ATTEMPTS: u32 = 3;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[cfg(target_os = "linux")]
-/// Open one socket, handshake it (retried, see below), then hand the split read/
+async fn open_ipc_stream(path: &std::path::Path) -> Result<IpcStream, OpenErr> {
+    match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::UnixStream::connect(path)).await {
+        Ok(Ok(s)) => Ok(s),
+        // A missing socket (ENOENT) means this candidate simply isn't there —
+        // skip fast without burning retries or adding noise.
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(OpenErr::NotFound),
+        Ok(Err(e)) => Err(OpenErr::Terminal(format!("{}: {}", path.display(), e))),
+        // Could not establish the connection in time. A live-but-busy socket
+        // may settle on a later try, so fall through to the next attempt.
+        Err(_) => Err(OpenErr::Retryable(format!("{}: connect timed out", path.display()))),
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn open_ipc_stream(path: &std::path::Path) -> Result<IpcStream, OpenErr> {
+    match tokio::net::windows::named_pipe::ClientOptions::new().open(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(OpenErr::NotFound),
+        // ERROR_PIPE_BUSY (231): pipe exists but all instances are momentarily busy.
+        Err(e) if e.raw_os_error() == Some(231) => {
+            Err(OpenErr::Retryable(format!("{}: pipe busy ({e})", path.display())))
+        }
+        Err(e) => Err(OpenErr::Terminal(format!("{}: {}", path.display(), e))),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+/// Open one IPC endpoint, handshake it (retried, see below), then hand the split read/
 /// write halves to a long-lived owner task. On success returns the shared
 /// `ConnectionHandle` for this one connection.
 async fn establish_connection(
     path: &std::path::Path,
     client_id: &str,
-) -> Result<ConnectionHandle, String> {
+) -> Result<ConnectionHandle, ConnectErr> {
     use tokio::io::AsyncWriteExt;
 
     // A freshly-idle Discord has its RPC thread asleep; the *first* connection
     // after a pause usually gets a handshake timeout while it wakes, then answers
     // promptly on the next one. That is why the very first presence push (right
-    // when the ride starts) can be flaky. We therefore open a fresh socket a few
+    // when the ride starts) can be flaky. We therefore open a fresh connection a few
     // times, giving Discord time to wake, before declaring this path dead. Absent
-    // sockets (the real `ipc-1..9`) fail fast (ENOENT) and return immediately, so
-    // this only ever costs a few seconds on the single live socket.
+    // endpoints (the real `ipc-1..9`) fail fast (ENOENT / NotFound) and return
+    // immediately, so this only ever costs a few seconds on the single live endpoint.
     let mut last: Option<String> = None;
     for _ in 0..HANDSHAKE_ATTEMPTS {
-        let mut stream =
-            match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::UnixStream::connect(path)).await {
-                Ok(Ok(s)) => s,
-                // A missing socket (ENOENT) means this candidate simply isn't there —
-                // terminal for this path; don't burn the remaining attempts on it.
-                Ok(Err(e)) => return Err(format!("{}: {}", path.display(), e)),
-                // Could not establish the connection in time. A live-but-busy socket
-                // may settle on a later try, so fall through to the next attempt.
-                Err(_) => {
-                    last = Some(format!("{}: connect timed out", path.display()));
-                    tokio::time::sleep(RETRY_DELAY).await;
-                    continue;
-                }
-            };
+        let mut stream = match open_ipc_stream(path).await {
+            Ok(s) => s,
+            Err(OpenErr::NotFound) => return Err(ConnectErr::NotFound),
+            Err(OpenErr::Terminal(e)) => return Err(ConnectErr::Failed(e)),
+            Err(OpenErr::Retryable(e)) => {
+                last = Some(e);
+                tokio::time::sleep(RETRY_DELAY).await;
+                continue;
+            }
+        };
 
         if let Err(e) = stream
             .write_all(&encode_frame(OP_HANDSHAKE, &json!({ "v": 1, "client_id": client_id })))
             .await
         {
-            return Err(format!("handshake write failed: {e}"));
+            return Err(ConnectErr::Failed(format!("handshake write failed: {e}")));
         }
 
         match tokio::time::timeout(HANDSHAKE_TIMEOUT, read_frame(&mut stream)).await {
-            // The socket is open but Discord didn't answer in time — most likely it's
-            // still waking up; retry the same socket on a fresh connection.
+            // The endpoint is open but Discord didn't answer in time — most likely it's
+            // still waking up; retry the same path on a fresh connection.
             Err(_) => {
                 last = Some("no READY from Discord (handshake timed out)".to_string());
                 tokio::time::sleep(RETRY_DELAY).await;
@@ -539,7 +587,7 @@ async fn establish_connection(
                     if body.get("error").is_some()
                         || body.get("evt").and_then(|e| e.as_str()) == Some("ERROR")
                     {
-                        return Err(error_message(&body)); // a real rejection — terminal
+                        return Err(ConnectErr::Failed(error_message(&body))); // a real rejection — terminal
                     }
                     let user = body
                         .pointer("/data/user/username")
@@ -549,9 +597,6 @@ async fn establish_connection(
 
                     // Split so the owner can await "read a frame" and "recv a command"
                     // in one select! without two arms fighting over one `&mut` stream.
-                    // (tokio::io::split returns the generic io::ReadHalf/WriteHalf,
-                    // unlike UnixStream::into_split which returns the net-specific
-                    // OwnedReadHalf/OwnedWriteHalf.)
                     let (read, write) = tokio::io::split(stream);
                     let (write_tx, write_rx) = tokio::sync::mpsc::channel::<WriteReq>(16);
                     let handle = ConnectionHandle {
@@ -562,34 +607,39 @@ async fn establish_connection(
                     tokio::spawn(owner_loop(read, write, handle.clone(), write_rx));
                     return Ok(handle);
                 }
-                Err(e) => return Err(e), // a real read error — terminal
+                Err(e) => return Err(ConnectErr::Failed(e)), // a real read error — terminal
             },
         }
     }
 
     let base = last.unwrap_or_else(|| format!("{}: connect failed", path.display()));
-    Err(format!("{base} (retried {HANDSHAKE_ATTEMPTS}x)"))
+    Err(ConnectErr::Failed(format!("{base} (retried {HANDSHAKE_ATTEMPTS}x)")))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 type Pending =
     std::collections::HashMap<String, tokio::sync::oneshot::Sender<Result<Value, String>>>;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// The single loop behind one connection. It is the ONLY reader and writer for the
-/// socket (via the split halves), which makes PING / SET_ACTIVITY ordering safe:
+/// stream (via the split halves), which makes PING / SET_ACTIVITY ordering safe:
 ///  * inbound PING                 -> write PONG (keeps the session alive);
 ///  * inbound frame with a `nonce` we're awaiting -> deliver the result to that command;
 ///  * a queued `WriteReq`          -> send the SET_ACTIVITY, remembering whose reply to wait on;
 ///  * EOF / write failure / last command sender dropped -> fail pending, tear down.
 async fn owner_loop(
-    mut read: tokio::io::ReadHalf<tokio::net::UnixStream>,
-    mut write: tokio::io::WriteHalf<tokio::net::UnixStream>,
+    mut read: tokio::io::ReadHalf<IpcStream>,
+    mut write: tokio::io::WriteHalf<IpcStream>,
     handle: ConnectionHandle,
     mut write_rx: tokio::sync::mpsc::Receiver<WriteReq>,
 ) {
     use tokio::io::AsyncWriteExt;
     let mut pending: Pending = std::collections::HashMap::new();
+
+    #[cfg(target_os = "windows")]
+    let pid = std::process::id();
+    #[cfg(not(target_os = "windows"))]
+    let pid = 0u32;
 
     loop {
         tokio::select! {
@@ -634,7 +684,7 @@ async fn owner_loop(
                             "v": 1,
                             "client_id": req.client_id,
                             "cmd": "SET_ACTIVITY",
-                            "args": { "pid": 0, "activity": req.activity },
+                            "args": { "pid": pid, "activity": req.activity },
                             "nonce": req.nonce,
                         });
                         pending.insert(req.nonce.clone(), req.reply);
@@ -660,9 +710,9 @@ async fn owner_loop(
     drop(write);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Ensure there is a live connection (reusing the held one, else re-establishing a
-/// fresh one over the candidate sockets) and run one command over it.
+/// fresh one over the candidate endpoints) and run one command over it.
 ///
 /// Self-healing: the `send` mutex serializes this against other pushes, and if the
 /// held connection has died (or a send fails) a new one is established before the
@@ -703,28 +753,34 @@ pub async fn set_activity(
     out
 }
 
-#[cfg(target_os = "linux")]
-/// Try each candidate socket; on the first success store the new handle and return
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+/// Try each candidate endpoint; on the first success store the new handle and return
 /// it. On total failure the error enumerates every candidate and what happened so
 /// the real problem (wrong path / stale socket / handshake reject / rate limit) is
 /// visible without the Terra terminal.
 async fn establish_and_store(state: &Discord, client_id: &str) -> Result<ConnectionHandle, String> {
     let slot = &state.inner().conn;
     let paths = candidate_paths();
-    let roots_txt = search_roots()
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
     let mut attempts: Vec<String> = Vec::with_capacity(paths.len());
 
-    let ctx = format!(
-        "env: XDG_RUNTIME_DIR={} HOME={} TMPDIR={} — probed: {roots_txt} — tried {} socket(s)",
-        std::env::var_os("XDG_RUNTIME_DIR").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
-        std::env::var_os("HOME").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
-        std::env::var_os("TMPDIR").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
-        paths.len(),
-    );
+    #[cfg(target_os = "linux")]
+    let ctx = {
+        let roots_txt = search_roots()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "env: XDG_RUNTIME_DIR={} HOME={} TMPDIR={} — probed: {roots_txt} — tried {} socket(s)",
+            std::env::var_os("XDG_RUNTIME_DIR").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
+            std::env::var_os("HOME").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
+            std::env::var_os("TMPDIR").map(|v| v.to_string_lossy().into_owned()).unwrap_or_else(|| "<unset>".into()),
+            paths.len(),
+        )
+    };
+    #[cfg(target_os = "windows")]
+    let ctx = format!(r"probed \\.\pipe\discord-ipc-0..{}", SOCKET_NAMES - 1);
+
     eprintln!("[discord] establishing connection — {ctx}");
 
     for path in &paths {
@@ -734,7 +790,8 @@ async fn establish_and_store(state: &Discord, client_id: &str) -> Result<Connect
                 eprintln!("[discord]   {p}: connected, handshake OK, holding open");
                 h
             }
-            Err(e) => {
+            Err(ConnectErr::NotFound) => continue,
+            Err(ConnectErr::Failed(e)) => {
                 let st = format!("connect/handshake failed: {e}");
                 eprintln!("[discord]   {p}: -> {st}");
                 attempts.push(format!("{p}: {st}"));
@@ -748,8 +805,16 @@ async fn establish_and_store(state: &Discord, client_id: &str) -> Result<Connect
     }
 
     let detail = if attempts.is_empty() {
-        "no Discord IPC socket candidate found (is Discord running? a Flatpak Discord's socket appears under $XDG_RUNTIME_DIR/app/<app-id>/<instance>/, e.g. app/com.discordapp.Discord/…; the list above is every directory probed)"
-            .to_string()
+        #[cfg(target_os = "linux")]
+        {
+            "no Discord IPC socket candidate found (is Discord running? a Flatpak Discord's socket appears under $XDG_RUNTIME_DIR/app/<app-id>/<instance>/, e.g. app/com.discordapp.Discord/…; the list above is every directory probed)"
+                .to_string()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            r"no Discord IPC pipe found under \\.\pipe\discord-ipc-0..9 (is Discord desktop running?)"
+                .to_string()
+        }
     } else {
         attempts.join("; ")
     };
@@ -759,7 +824,7 @@ async fn establish_and_store(state: &Discord, client_id: &str) -> Result<Connect
     Err(msg)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
 mod tests {
     use super::*;
 

@@ -13,6 +13,10 @@ const { spawn } = require('child_process');
 const FRAMEGEN_MODES = new Set(['off', '2x', '3x', '4x', 'adaptive60', 'adaptive120']);
 
 function getTerraDataDir() {
+  if (process.platform === 'win32') {
+    const base = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(base, 'terra');
+  }
   const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
   return path.join(base, 'terra');
 }
@@ -473,7 +477,8 @@ function startRustProcess() {
 
   console.log('[electron] Spawning real Rust BLE & Addons backend:', binaryPath);
   rustProcess = spawn(binaryPath, ['--rpc'], {
-    detached: process.platform !== 'win32'
+    detached: process.platform !== 'win32',
+    windowsHide: true
   });
 
   let lineBuffer = '';
@@ -852,10 +857,16 @@ async function btappEnsure(wc) {
 function createWindow() {
   Menu.setApplicationMenu(null);
 
+  const iconCandidates = process.platform === 'win32'
+    ? [path.join(__dirname, '..', 'icons', 'icon.ico'), path.join(process.resourcesPath, 'icons', 'icon.ico')]
+    : [path.join(__dirname, '..', 'icons', 'icon.png')];
+  const windowIcon = iconCandidates.find((p) => fs.existsSync(p));
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     title: 'Terra',
+    ...(windowIcon ? { icon: windowIcon } : {}),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
