@@ -1303,6 +1303,56 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           });
           actions.append(pickBtn);
         }
+        const exportWvBtn = h('button', { class: 'terra-btn', type: 'button' }, 'Export WebView storage');
+        exportWvBtn.addEventListener('click', async () => {
+          exportWvBtn.disabled = true;
+          exportWvBtn.textContent = 'Exporting\u2026';
+          statusMsg.className = '';
+          statusMsg.textContent = '';
+          try {
+            const res = await core.call('terra_export_webview_storage', {});
+            const mb = ((res.bytes || 0) / (1024 * 1024)).toFixed(2);
+            statusMsg.className = 'terra-dd-restart';
+            statusMsg.textContent = 'Exported ' + (res.files || 0) + ' files (' + mb + ' MB) to ' + res.path;
+            core.log('terra-ui', 'exported webview storage: ' + JSON.stringify(res));
+          } catch (e) {
+            statusMsg.className = 'terra-dd-error';
+            statusMsg.textContent = 'Export failed: ' + e;
+            core.log('terra-ui', 'export webview storage failed: ' + e);
+          }
+          exportWvBtn.disabled = false;
+          exportWvBtn.textContent = 'Export WebView storage';
+        });
+        actions.append(exportWvBtn);
+
+        const backupNowBtn = h('button', { class: 'terra-btn', type: 'button' }, 'Backup ride now');
+        backupNowBtn.addEventListener('click', async () => {
+          backupNowBtn.disabled = true;
+          backupNowBtn.textContent = 'Backing up\u2026';
+          statusMsg.className = '';
+          statusMsg.textContent = '';
+          try {
+            const r = await backupActiveRides(true);
+            statusMsg.className = r.saved > 0 ? 'terra-dd-restart' : 'terra-dd-hint';
+            if (r.saved > 0) {
+              statusMsg.textContent = 'Saved ' + r.saved + ' ride snapshot' + (r.saved === 1 ? '' : 's') + ' to ' + r.lastPath;
+              if (backupCountEl && typeof r.backupsCount === 'number') {
+                backupCountEl.textContent = ' (' + r.backupsCount + ' saved)';
+              }
+            } else if (r.found > 0) {
+              statusMsg.textContent = 'Ride backup is already up to date.';
+            } else {
+              statusMsg.textContent = 'No in-progress ride with distance/telemetry found in IndexedDB.';
+            }
+          } catch (e) {
+            statusMsg.className = 'terra-dd-error';
+            statusMsg.textContent = 'Ride backup failed: ' + e;
+          }
+          backupNowBtn.disabled = false;
+          backupNowBtn.textContent = 'Backup ride now';
+        });
+        actions.append(backupNowBtn);
+
         const resetBtn = h('button', { class: 'terra-btn-danger', type: 'button' }, 'Reset all data');
         resetBtn.addEventListener('click', async () => {
           if (!confirm('This will DELETE all Terra addons, addon settings, and remembered Bluetooth devices.\n\nThis cannot be undone. Continue?')) return;
@@ -1314,7 +1364,21 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           } catch (e) { alert('Reset failed: ' + e); }
         });
         actions.append(resetBtn);
-        ddSection.append(actions);
+
+        const autoChk = h('input', { type: 'checkbox' });
+        autoChk.checked = isAutoBackupEnabled();
+        autoChk.addEventListener('change', () => {
+          try { localStorage.setItem(AUTO_BACKUP_KEY, autoChk.checked ? '1' : '0'); } catch {}
+          if (autoChk.checked) backupActiveRides(false).catch(() => {});
+        });
+        const backupCountEl = h('span', { style: 'color:#888;' },
+          typeof st.rideBackupsCount === 'number' ? ' (' + st.rideBackupsCount + ' saved)' : '');
+        const autoRow = h('label', { style: 'display:flex;align-items:center;gap:6px;margin-top:8px;color:#ccc;cursor:pointer;' },
+          autoChk,
+          h('span', {}, 'Auto-backup in-progress rides to ride-backups/'),
+          backupCountEl
+        );
+        ddSection.append(actions, autoRow);
       } catch (e) {
         ddSection.append(h('div', { class: 'terra-dd-path' }, 'data folder feature unavailable'));
       }
@@ -1487,6 +1551,121 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
       else openModal();
     }
   }, true);
+
+  // ---------- Proactive in-progress ride auto-backup (IndexedDB keyval-store -> ride-backups/) ----------
+  const AUTO_BACKUP_KEY = 'terra-ride-auto-backup';
+  const isAutoBackupEnabled = () => {
+    try { return localStorage.getItem(AUTO_BACKUP_KEY) !== '0'; } catch { return true; }
+  };
+  const lastBackedUp = new Map(); // "key:sessionTag" -> { maxDist, rowCount }
+  let rideBackupBusy = false;
+
+  function formatUtcTag(ms) {
+    const d = new Date(typeof ms === 'number' && ms > 1e11 ? ms : Date.now());
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
+  }
+
+  async function readKeyvalRides() {
+    if (typeof indexedDB === 'undefined') return [];
+    // Avoid creating an empty keyval-store before Biketerra initializes it
+    if (typeof indexedDB.databases === 'function') {
+      const dbs = await indexedDB.databases();
+      if (!dbs.some((d) => d && d.name === 'keyval-store')) return [];
+    }
+    const db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open('keyval-store');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('open keyval-store failed'));
+    });
+    try {
+      if (!db.objectStoreNames.contains('keyval')) return [];
+      return await new Promise((resolve, reject) => {
+        const out = [];
+        const tx = db.transaction('keyval', 'readonly');
+        const req = tx.objectStore('keyval').openCursor();
+        req.onsuccess = () => {
+          const cur = req.result;
+          if (!cur) return resolve(out);
+          const k = cur.key;
+          const v = cur.value;
+          if (typeof k === 'string' && v && typeof v === 'object' && Array.isArray(v.rows) && v.rows.length > 0 && Array.isArray(v.keys)) {
+            out.push({ key: k, val: v });
+          }
+          cur.continue();
+        };
+        req.onerror = () => reject(req.error || new Error('cursor failed'));
+      });
+    } finally {
+      try { db.close(); } catch {}
+    }
+  }
+
+  async function backupActiveRides(force = false) {
+    if (rideBackupBusy) return { found: 0, saved: 0, lastPath: '', backupsCount: undefined };
+    rideBackupBusy = true;
+    try {
+      const rides = await readKeyvalRides();
+      let found = 0, saved = 0, lastPath = '', backupsCount;
+      for (const { key, val } of rides) {
+        const keys = val.keys;
+        const rows = val.rows;
+        const dIdx = keys.indexOf('distance');
+        const pIdx = keys.indexOf('power');
+        const sIdx = keys.indexOf('speed');
+        const tIdx = keys.indexOf('timestamp');
+        let maxDist = 0, hasActivity = false;
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i];
+          if (!Array.isArray(r)) continue;
+          if (dIdx >= 0 && r[dIdx] > maxDist) maxDist = r[dIdx];
+          if (!hasActivity && ((dIdx >= 0 && r[dIdx] > 0) || (pIdx >= 0 && r[pIdx] > 0) || (sIdx >= 0 && r[sIdx] > 0))) {
+            hasActivity = true;
+          }
+        }
+        // Skip empty / reset records (e.g. 0 distance, 0 speed, 0 power)
+        if (!hasActivity) continue;
+        found++;
+        const firstTs = tIdx >= 0 && Array.isArray(rows[0]) ? rows[0][tIdx] : Date.now();
+        const sessionTag = formatUtcTag(firstTs);
+        const cacheKey = key + ':' + sessionTag;
+        const prev = lastBackedUp.get(cacheKey);
+        if (!force && prev && maxDist <= prev.maxDist + 0.01 && rows.length <= prev.rowCount) {
+          continue;
+        }
+        const res = await core.call('terra_backup_ride', {
+          key,
+          sessionTag,
+          maxDist,
+          rowCount: rows.length,
+          payload: JSON.stringify(val),
+        });
+        if (res && typeof res.backupsCount === 'number') backupsCount = res.backupsCount;
+        if (res && res.status === 'saved') {
+          saved++;
+          lastPath = res.path || lastPath;
+          lastBackedUp.set(cacheKey, { maxDist, rowCount: rows.length });
+        } else if (res && res.status === 'skipped') {
+          lastBackedUp.set(cacheKey, { maxDist, rowCount: rows.length });
+        }
+      }
+      return { found, saved, lastPath, backupsCount };
+    } finally {
+      rideBackupBusy = false;
+    }
+  }
+
+  // Run auto-backup periodically and when the page is backgrounded/unloaded
+  setTimeout(() => { if (isAutoBackupEnabled()) backupActiveRides(false).catch(() => {}); }, 15000);
+  setInterval(() => { if (isAutoBackupEnabled()) backupActiveRides(false).catch(() => {}); }, 30000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && isAutoBackupEnabled()) {
+      backupActiveRides(false).catch(() => {});
+    }
+  });
+  addEventListener('pagehide', () => {
+    if (isAutoBackupEnabled()) backupActiveRides(false).catch(() => {});
+  });
 
   core.bus.on('terra:open-addons', (e) => openModal(e));
   setInterval(placeCog, 500);

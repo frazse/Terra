@@ -464,6 +464,19 @@ async fn dispatch_rpc_command(
             Err("Data folder selection is only available on Android.".to_string())
         }
 
+        "terra_export_webview_storage" => {
+            crate::android_data_dir::terra_export_webview_storage(app.clone()).await
+        }
+
+        "terra_backup_ride" => {
+            let key = args_val.get("key").and_then(|v| v.as_str()).ok_or("missing key")?.to_string();
+            let session_tag = args_val.get("sessionTag").and_then(|v| v.as_str()).ok_or("missing sessionTag")?.to_string();
+            let max_dist = args_val.get("maxDist").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let row_count = args_val.get("rowCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let payload = args_val.get("payload").and_then(|v| v.as_str()).ok_or("missing payload")?.to_string();
+            crate::android_data_dir::terra_backup_ride(app.clone(), key, session_tag, max_dist, row_count, payload).await
+        }
+
         _ => Err(format!("Unknown RPC command: {cmd}")),
     }
 }

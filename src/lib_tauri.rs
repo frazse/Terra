@@ -66,6 +66,8 @@ pub fn run() {
             crate::android_data_dir::terra_data_dir_status,
             crate::android_data_dir::terra_dismiss_data_dir_prompt,
             crate::android_data_dir::terra_reset_all_data,
+            crate::android_data_dir::terra_export_webview_storage,
+            crate::android_data_dir::terra_backup_ride,
         ])
         .setup(|app| {
             let handle = app.handle();
