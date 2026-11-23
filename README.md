@@ -5,7 +5,7 @@
 
 **Terra** is an open-source, cross-platform companion runtime for **[Biketerra.com](https://biketerra.com)**. It wraps Biketerra in a dedicated webview, injects a lightweight shim layer (`shim/` — Web Bluetooth, an addon runtime, and Terra's settings UI) before the page boots, and pairs it with a native **Rust** backend (`src/`) for Bluetooth LE, local networking, Discord Rich Presence, and persistent storage.
 
-**Stack:** one shared **Rust** backend + **Electron / Chromium** (Linux desktop) + **Tauri WebView** (Android).
+**Stack:** one shared **Rust** backend + **Electron / Chromium** (Linux & Windows desktop) + **Tauri WebView** (Android).
 
 ---
 
@@ -32,6 +32,9 @@
 | **Android** | `aarch64-linux-android` | Tauri WebView + Rust JNI | `.apk` |
 | **Linux desktop** (x86_64) | `x86_64-unknown-linux-gnu` | Electron / Chromium + Rust `--rpc` over stdio | `AppImage` |
 | **Linux desktop** (ARM64) | `aarch64` | Electron / Chromium + Rust `--rpc` over stdio | `AppImage` (GitHub Actions CI) |
+| **Windows desktop** (x64) | `x86_64-pc-windows-msvc` | Electron / Chromium + Rust `--rpc` over stdio | `.exe` (GitHub Actions CI) |
+
+> **Prebuilt CI artifacts:** Windows x64 (`.exe`) and Linux ARM64 (`AppImage`) builds are built automatically on GitHub Actions ([`build-windows.yml`](.github/workflows/build-windows.yml), [`build-arm64.yml`](.github/workflows/build-arm64.yml)) and can be downloaded from the repository's **Actions** tab (`Terra-Windows-x64` artifact) or **Releases**.
 
 ---
 
