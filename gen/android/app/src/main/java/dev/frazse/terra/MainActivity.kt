@@ -287,40 +287,50 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
+    TerraBleService.stop(this)
     try {
       CookieManager.getInstance().flush()
     } catch (_: Exception) {}
     super.onDestroy()
   }
 
-  private fun extractBundledAddons() {
-    try {
-      val dataDir = getTerraDataDir()
-      val addonsDir = File(dataDir, "addons")
-      if (!addonsDir.exists()) addonsDir.mkdirs()
+  private fun copyAssetTree(assetPath: String, target: File) {
+    val children = assets.list(assetPath)
+    if (children != null && children.isNotEmpty()) {
+      target.mkdirs()
+      for (child in children) {
+        copyAssetTree("$assetPath/$child", File(target, child))
+      }
+    } else {
+      target.parentFile?.mkdirs()
+      assets.open(assetPath).use { inStream ->
+        FileOutputStream(target).use { outStream ->
+          inStream.copyTo(outStream)
+        }
+      }
+    }
+  }
 
-      // keep in sync with BUNDLED_ADDONS in build-apk.sh
-      val bundledAddons = listOf("zwift-ride", "garmin-hud", "fps-monitor", "wifi-trainer-bridge")
-      for (addonName in bundledAddons) {
+  private fun extractBundledAddons() {
+    val dataDir = getTerraDataDir()
+    val addonsDir = File(dataDir, "addons")
+    if (!addonsDir.exists()) addonsDir.mkdirs()
+
+    // keep in sync with BUNDLED_ADDONS in build-apk.sh
+    val bundledAddons = listOf("zwift-ride", "garmin-hud", "fps-monitor", "wifi-trainer-bridge")
+    for (addonName in bundledAddons) {
+      try {
         val targetDir = File(addonsDir, addonName)
         if (!shouldExtract(addonName, targetDir)) continue
         if (targetDir.exists()) targetDir.deleteRecursively() // stale copy: replace it
-        targetDir.mkdirs()
-        val files = assets.list("addons/$addonName") ?: continue
-        for (f in files) {
-          assets.open("addons/$addonName/$f").use { inStream ->
-            FileOutputStream(File(targetDir, f)).use { outStream ->
-              inStream.copyTo(outStream)
-            }
-          }
-        }
+        copyAssetTree("addons/$addonName", targetDir)
         android.util.Log.i(
           "Terra",
           "Extracted bundled $addonName addon v${bundledAddonVersion(addonName) ?: "?"}"
         )
+      } catch (e: Exception) {
+        android.util.Log.e("Terra", "Error extracting bundled addon $addonName", e)
       }
-    } catch (e: Exception) {
-      android.util.Log.e("Terra", "Error extracting bundled addons", e)
     }
   }
 
@@ -847,6 +857,11 @@ class MainActivity : TauriActivity() {
       }
       if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
         permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+      }
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
       }
     }
     if (Build.VERSION.SDK_INT >= 37) {

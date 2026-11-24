@@ -14,6 +14,10 @@
     "allow-ble-disconnect-all",
     "allow-ble-forget",
     "allow-ble-devices-status",
+    "allow-ble-native-scan-start",
+    "allow-ble-native-scan-stop",
+    "allow-ble-scan-candidates",
+    "allow-ble-remember",
     "allow-ble-drop-device",
     "allow-ble-drop-all",
     "allow-ble-remembered",
@@ -58,6 +62,12 @@
     "allow-terra-pick-data-dir",
     "allow-terra-data-dir-status",
     "allow-terra-dismiss-data-dir-prompt",
-    "allow-terra-reset-all-data"
+    "allow-terra-reset-all-data",
+    "allow-terra-export-webview-storage",
+    "allow-terra-backup-ride",
+    "allow-terra-list-ride-backups",
+    "allow-terra-read-ride-backup",
+    "allow-terra-export-ride-gpx",
+    "allow-terra-delete-ride-backup"
   ]
 }

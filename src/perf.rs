@@ -5,7 +5,9 @@
 //! - Android: JNI call to `MainActivity.getPerfStatsJson()` (PowerManager thermal status, battery temp, RAM, best-effort sysfs)
 //! - Windows/macOS: optional cached `nvidia-smi` (Electron host merges Chromium `app.getAppMetrics()` + `os.*`)
 
+#[cfg(not(target_os = "android"))]
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_os = "android"))]
 use std::time::{Duration, Instant};
 
 use serde::Serialize;

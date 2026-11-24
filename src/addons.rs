@@ -1447,12 +1447,35 @@ pub async fn addon_save_file(app: AppHandle, addon: String, filename: String, ba
         return Err("file name or type not allowed".into());
     }
     let bytes = B64.decode(base64).map_err(err)?;
-    let dir = app
-    .path()
-    .download_dir()
-    .or_else(|_| app.path().home_dir())
-    .map_err(err)?
-    .join("Terra");
+    let dir = {
+        #[cfg(target_os = "android")]
+        {
+            let storage = crate::ble::get_terra_storage_dir(&app);
+            let hidden_default = PathBuf::from("/storage/emulated/0/Android/data/dev.frazse.terra/files");
+            if storage != hidden_default {
+                storage.join("exports")
+            } else {
+                let public_dl = PathBuf::from("/storage/emulated/0/Download/Terra");
+                if fs::create_dir_all(&public_dl).is_ok() {
+                    public_dl
+                } else {
+                    app.path()
+                        .download_dir()
+                        .or_else(|_| app.path().home_dir())
+                        .map_err(err)?
+                        .join("Terra")
+                }
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            app.path()
+                .download_dir()
+                .or_else(|_| app.path().home_dir())
+                .map_err(err)?
+                .join("Terra")
+        }
+    };
     fs::create_dir_all(&dir).map_err(err)?;
     let stem = Path::new(&clean).file_stem().and_then(|s| s.to_str()).unwrap_or("file").to_string();
     let mut path = dir.join(&clean);

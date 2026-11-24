@@ -556,3 +556,407 @@ pub async fn terra_backup_ride(
         }))
     }
 }
+
+// ─── Ride backup manager (list, read/restore, GPX export, delete) ───────────
+
+fn validate_backup_filename(filename: &str) -> Result<&str, String> {
+    if filename.is_empty()
+        || filename.len() > 140
+        || !filename.ends_with(".json")
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains("..")
+        || !filename
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err("invalid backup filename".into());
+    }
+    Ok(filename)
+}
+
+/// Extract the Biketerra IndexedDB key from `<key>-YYYYMMDD-HHMMSS.json`.
+fn infer_key_from_filename(filename: &str) -> String {
+    let stem = filename.strip_suffix(".json").unwrap_or(filename);
+    // Strip trailing `-YYYYMMDD-HHMMSS` (16 chars) when present
+    if stem.len() > 16 {
+        let suffix = &stem[stem.len() - 16..];
+        let b = suffix.as_bytes();
+        if b[0] == b'-'
+            && b[9] == b'-'
+            && b[1..9].iter().all(|c| c.is_ascii_digit())
+            && b[10..16].iter().all(|c| c.is_ascii_digit())
+        {
+            return stem[..stem.len() - 16].to_string();
+        }
+    }
+    stem.to_string()
+}
+
+fn format_utc_iso_ms(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400) as u64;
+    let hh = rem / 3600;
+    let mm = (rem % 3600) / 60;
+    let ss = rem % 60;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+fn to_degrees(v: f64) -> Option<f64> {
+    if !v.is_finite() || v == 0.0 || (v as i64) == 0x7FFF_FFFF {
+        return None;
+    }
+    let deg = if v.abs() > 180.0 {
+        v * (180.0 / 2_147_483_648.0)
+    } else {
+        v
+    };
+    if deg.abs() <= 180.0 {
+        Some(deg)
+    } else {
+        None
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn resolve_export_dir(app: &AppHandle) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        let storage = crate::ble::get_terra_storage_dir(app);
+        let hidden_default = PathBuf::from("/storage/emulated/0/Android/data/dev.frazse.terra/files");
+        if storage != hidden_default {
+            return storage.join("exports");
+        }
+        let public_dl = PathBuf::from("/storage/emulated/0/Download/Terra");
+        if std::fs::create_dir_all(&public_dl).is_ok() {
+            return public_dl;
+        }
+        storage.join("exports")
+    }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        let _ = app;
+        dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(crate::ble::get_terra_storage_dir)
+            .join("Terra")
+    }
+    #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "windows")))]
+    {
+        resolve_data_dir(app).join("exports")
+    }
+}
+
+/// List saved JSON snapshots in `<terra_data_dir>/ride-backups/` with summary metrics.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+pub async fn terra_list_ride_backups(app: AppHandle) -> Result<serde_json::Value, String> {
+    let dir = resolve_data_dir(&app).join("ride-backups");
+    tokio::task::spawn_blocking(move || {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return Ok(serde_json::json!({ "dir": dir.to_string_lossy(), "backups": [] }));
+        };
+        let mut items: Vec<(u64, serde_json::Value)> = Vec::new();
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(fname) = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()) else {
+                continue;
+            };
+            let meta = entry.metadata().ok();
+            let bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let mtime_ms = meta
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            let key = infer_key_from_filename(&fname);
+            let mut row_count = 0usize;
+            let mut max_dist = 0.0f64;
+            let mut start_ts: Option<i64> = None;
+            let mut end_ts: Option<i64> = None;
+            let mut pwr_sum = 0.0f64;
+            let mut pwr_cnt = 0usize;
+            let mut max_hr = 0u64;
+
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    let keys: Vec<&str> = val
+                        .get("keys")
+                        .and_then(|k| k.as_array())
+                        .map(|arr| arr.iter().filter_map(|x| x.as_str()).collect())
+                        .unwrap_or_default();
+                    let col = |name: &str| keys.iter().position(|&k| k == name);
+                    let t_idx = col("timestamp");
+                    let d_idx = col("distance");
+                    let p_idx = col("power");
+                    let h_idx = col("heart_rate");
+
+                    if let Some(rows) = val.get("rows").and_then(|r| r.as_array()) {
+                        row_count = rows.len();
+                        if let Some(ti) = t_idx {
+                            start_ts = rows.first().and_then(|r| r.get(ti)).and_then(|v| v.as_i64());
+                            end_ts = rows.last().and_then(|r| r.get(ti)).and_then(|v| v.as_i64());
+                        }
+                        for r in rows {
+                            if let Some(di) = d_idx {
+                                if let Some(d) = r.get(di).and_then(|v| v.as_f64()) {
+                                    if d > max_dist {
+                                        max_dist = d;
+                                    }
+                                }
+                            }
+                            if let Some(pi) = p_idx {
+                                if let Some(p) = r.get(pi).and_then(|v| v.as_f64()) {
+                                    if p > 0.0 {
+                                        pwr_sum += p;
+                                        pwr_cnt += 1;
+                                    }
+                                }
+                            }
+                            if let Some(hi) = h_idx {
+                                if let Some(h) = r.get(hi).and_then(|v| v.as_u64()) {
+                                    if h > max_hr {
+                                        max_hr = h;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let avg_power = if pwr_cnt > 0 {
+                Some((pwr_sum / pwr_cnt as f64).round() as u64)
+            } else {
+                None
+            };
+            items.push((
+                mtime_ms,
+                serde_json::json!({
+                    "filename": fname,
+                    "key": key,
+                    "bytes": bytes,
+                    "rows": row_count,
+                    "maxDist": (max_dist * 100.0).round() / 100.0,
+                    "startTs": start_ts,
+                    "endTs": end_ts,
+                    "avgPower": avg_power,
+                    "maxHr": if max_hr > 0 { Some(max_hr) } else { None },
+                    "modifiedMs": mtime_ms
+                }),
+            ));
+        }
+        items.sort_by(|a, b| b.0.cmp(&a.0));
+        let backups: Vec<serde_json::Value> = items.into_iter().map(|(_, v)| v).collect();
+        Ok(serde_json::json!({
+            "dir": dir.to_string_lossy(),
+            "backups": backups
+        }))
+    })
+    .await
+    .map_err(|e| format!("list backups task failed: {e}"))?
+}
+
+/// Read a saved ride backup JSON so the WebView can restore it into Biketerra's IndexedDB.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+pub async fn terra_read_ride_backup(
+    app: AppHandle,
+    filename: String,
+) -> Result<serde_json::Value, String> {
+    let clean = validate_backup_filename(&filename)?.to_string();
+    let path = resolve_data_dir(&app).join("ride-backups").join(&clean);
+    tokio::task::spawn_blocking(move || {
+        let payload =
+            std::fs::read_to_string(&path).map_err(|e| format!("read backup {clean}: {e}"))?;
+        let key = infer_key_from_filename(&clean);
+        Ok(serde_json::json!({
+            "filename": clean,
+            "key": key,
+            "payload": payload
+        }))
+    })
+    .await
+    .map_err(|e| format!("read backup task failed: {e}"))?
+}
+
+/// Convert a saved ride backup JSON into GPX 1.1 (with power, HR, cadence extensions)
+/// and write it to the visible exports / Downloads folder.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+pub async fn terra_export_ride_gpx(
+    app: AppHandle,
+    filename: String,
+) -> Result<serde_json::Value, String> {
+    let clean = validate_backup_filename(&filename)?.to_string();
+    let src_path = resolve_data_dir(&app).join("ride-backups").join(&clean);
+    let export_dir = resolve_export_dir(&app);
+
+    tokio::task::spawn_blocking(move || {
+        let raw =
+            std::fs::read_to_string(&src_path).map_err(|e| format!("read backup {clean}: {e}"))?;
+        let val: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|e| format!("parse backup JSON: {e}"))?;
+
+        let keys: Vec<&str> = val
+            .get("keys")
+            .and_then(|k| k.as_array())
+            .map(|arr| arr.iter().filter_map(|x| x.as_str()).collect())
+            .ok_or_else(|| "backup missing keys array".to_string())?;
+        let rows = val
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .ok_or_else(|| "backup missing rows array".to_string())?;
+
+        let col = |name: &str| keys.iter().position(|&k| k == name);
+        let t_idx = col("timestamp");
+        let lat_idx = col("lat").ok_or_else(|| "backup missing lat column".to_string())?;
+        let lng_idx = col("lng").ok_or_else(|| "backup missing lng column".to_string())?;
+        let alt_idx = col("altitude");
+        let hr_idx = col("heart_rate");
+        let cad_idx = col("cadence");
+        let pwr_idx = col("power");
+
+        let stem = clean.strip_suffix(".json").unwrap_or(&clean);
+        let ride_key = infer_key_from_filename(&clean);
+        let start_iso = t_idx
+            .and_then(|ti| rows.first().and_then(|r| r.get(ti)).and_then(|v| v.as_i64()))
+            .map(format_utc_iso_ms);
+
+        let mut gpx = String::with_capacity(rows.len() * 160 + 512);
+        gpx.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        gpx.push_str("<gpx version=\"1.1\" creator=\"Terra\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\">\n");
+        gpx.push_str("  <metadata>\n");
+        gpx.push_str(&format!("    <name>Biketerra {}</name>\n", xml_escape(&ride_key)));
+        if let Some(ref iso) = start_iso {
+            gpx.push_str(&format!("    <time>{iso}</time>\n"));
+        }
+        gpx.push_str("  </metadata>\n  <trk>\n");
+        gpx.push_str(&format!("    <name>Biketerra {}</name>\n    <type>cycling</type>\n    <trkseg>\n", xml_escape(&ride_key)));
+
+        let mut points = 0usize;
+        for r in rows {
+            let Some(lat) = r.get(lat_idx).and_then(|v| v.as_f64()).and_then(to_degrees) else {
+                continue;
+            };
+            let Some(lon) = r.get(lng_idx).and_then(|v| v.as_f64()).and_then(to_degrees) else {
+                continue;
+            };
+            gpx.push_str(&format!("      <trkpt lat=\"{lat:.7}\" lon=\"{lon:.7}\">\n"));
+            if let Some(alt) = alt_idx.and_then(|i| r.get(i)).and_then(|v| v.as_f64()) {
+                if alt.is_finite() {
+                    gpx.push_str(&format!("        <ele>{alt:.1}</ele>\n"));
+                }
+            }
+            if let Some(ts) = t_idx.and_then(|i| r.get(i)).and_then(|v| v.as_i64()) {
+                gpx.push_str(&format!("        <time>{}</time>\n", format_utc_iso_ms(ts)));
+            }
+            let pwr = pwr_idx
+                .and_then(|i| r.get(i))
+                .and_then(|v| v.as_f64())
+                .filter(|&v| v.is_finite() && v > 0.0)
+                .map(|v| v.round() as u64);
+            let hr = hr_idx
+                .and_then(|i| r.get(i))
+                .and_then(|v| v.as_u64())
+                .filter(|&v| v > 0);
+            let cad = cad_idx
+                .and_then(|i| r.get(i))
+                .and_then(|v| v.as_u64())
+                .filter(|&v| v > 0);
+            if pwr.is_some() || hr.is_some() || cad.is_some() {
+                gpx.push_str("        <extensions>\n");
+                if let Some(p) = pwr {
+                    gpx.push_str(&format!("          <power>{p}</power>\n"));
+                }
+                if hr.is_some() || cad.is_some() {
+                    gpx.push_str("          <gpxtpx:TrackPointExtension>\n");
+                    if let Some(h) = hr {
+                        gpx.push_str(&format!("            <gpxtpx:hr>{h}</gpxtpx:hr>\n"));
+                    }
+                    if let Some(c) = cad {
+                        gpx.push_str(&format!("            <gpxtpx:cad>{c}</gpxtpx:cad>\n"));
+                    }
+                    gpx.push_str("          </gpxtpx:TrackPointExtension>\n");
+                }
+                gpx.push_str("        </extensions>\n");
+            }
+            gpx.push_str("      </trkpt>\n");
+            points += 1;
+        }
+
+        if points == 0 {
+            return Err("Backup has no valid GPS coordinates to export.".into());
+        }
+        gpx.push_str("    </trkseg>\n  </trk>\n</gpx>\n");
+
+        std::fs::create_dir_all(&export_dir)
+            .map_err(|e| format!("mkdir {}: {e}", export_dir.display()))?;
+        let mut out_path = export_dir.join(format!("{stem}.gpx"));
+        let mut n = 1usize;
+        while out_path.exists() {
+            out_path = export_dir.join(format!("{stem}-{n}.gpx"));
+            n += 1;
+        }
+        let bytes = gpx.len() as u64;
+        std::fs::write(&out_path, gpx.as_bytes())
+            .map_err(|e| format!("write GPX {}: {e}", out_path.display()))?;
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "path": out_path.to_string_lossy().to_string(),
+            "points": points,
+            "bytes": bytes
+        }))
+    })
+    .await
+    .map_err(|e| format!("export GPX task failed: {e}"))?
+}
+
+/// Delete a single saved ride backup file from `<terra_data_dir>/ride-backups/`.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+pub async fn terra_delete_ride_backup(
+    app: AppHandle,
+    filename: String,
+) -> Result<serde_json::Value, String> {
+    let clean = validate_backup_filename(&filename)?.to_string();
+    let dir = resolve_data_dir(&app).join("ride-backups");
+    let path = dir.join(&clean);
+    tokio::task::spawn_blocking(move || {
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| format!("delete {clean}: {e}"))?;
+        }
+        Ok(serde_json::json!({
+            "status": "ok",
+            "backupsCount": count_json_files(&dir)
+        }))
+    })
+    .await
+    .map_err(|e| format!("delete backup task failed: {e}"))?
+}

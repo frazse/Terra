@@ -3801,9 +3801,10 @@ dependencies = [
 
 [[package]]
 name = "terra"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
+ "bluez-async",
  "btleplug",
  "crc32fast",
  "dirs 5.0.1",

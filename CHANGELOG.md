@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.12.0] — Native BLE Bridge (Linux & Android), BlueZ & Android BLE Overhaul, Ride Backups & AppImage Wayland Icon
+
+### Added
+- **Biketerra Native BLE Bridge (`window.isNative` / `window.native`) on Linux Desktop & Android** — Terra now implements Biketerra's official native Bluetooth bridge on both desktop and Android (`ble_native_scan_start`, `ble_native_scan_stop`, `ble_scan_candidates`, `ble_remember`), synchronously seeding `saved-devices` before page boot so trainers, heart rate monitors, and virtual addon devices (`zwift-ride` OBC, `wifi-trainer-bridge`) auto-connect cleanly across new rides, resumed rides, and multi-ride sessions without DOM button clicking.
+- **Automatic In-Progress Ride Backups & WebView Storage Export** — periodically snapshots active ride data (every 30 s, on backgrounding, and on `pagehide`) with an in-app backup viewer, GPX export, deletion, and full WebView storage export (`terra_backup_ride`, `terra_list_ride_backups`, `terra_read_ride_backup`, `terra_export_ride_gpx`, `terra_delete_ride_backup`, `terra_export_webview_storage`).
+- **Android BLE Foreground Service (`TerraBleService`)** — keeps active Bluetooth GATT connections alive while riding on Android.
+- **Windows x64 Desktop Build & CI** — added Electron + Rust RPC Windows desktop support and GitHub Actions build workflow.
+
+### Fixed
+- **Linux BlueZ dropouts & slow GATT discovery** — switched Linux discovery to LE-only (`Transport::Le`) via `bluez-async` to avoid BR/EDR radio collisions on KICKR trainers, serialized GATT connections with discovery recovery for large GATT tables, and kept LE-only scanning active until all remembered non-excluded devices (including Zwift Ride controllers) connect.
+- **Desktop shutdown leaving BLE devices connected** — parallelized both disconnect passes in `Broker::disconnect_all()`, raised Electron's `ble_disconnect_all` shutdown budget from 2 s to 8 s, and hid the window immediately on close so all connected peripherals (trainer, HRM, both Zwift Ride controllers) disconnect cleanly.
+- **Android BLE scan starvation & GATT reliability** — prevented powered-off remembered devices from holding `connect_gate` and stopping scans (`status 147` fast-fail + visibility check), reused active GATT links without interrupting scans, serialized per-device GATT/CCCD queues, retained split advertisement/scan-response service UUIDs, and unsubscribed only actively subscribed characteristics on disconnect.
+- **Linux AppImage icon on Wayland & X11** — bundled app icons inside `extraResources`, set `StartupWMClass` / `app.setDesktopName('terra-desktop.desktop')`, and installed a managed `NoDisplay=true` desktop entry + hicolor icon on AppImage launch so Wayland compositors display the Terra icon.
+- **Android export path** — `addon_save_file` now saves to `<data-dir>/exports` when a custom data folder is configured, or `/storage/emulated/0/Download/Terra` otherwise.
+
+### Changed
+- **Refreshed `Terra-Addons` submodule** — includes `terra-climb` v0.2.2, `zwift-ride` v0.6.6, `voice-chat` v0.3.0, `rowbike` v0.2.0, `garmin-hud` v1.4.2, `group-spectate` v0.3.0, `fps-monitor` v0.3.1, and `realistic-gears` v1.2.2.
+
 ## [0.11.2] — Fix Addon Bluetooth Chooser With Wi-Fi Trainer Bridge
 
 ### Fixed

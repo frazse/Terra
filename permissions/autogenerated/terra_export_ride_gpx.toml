@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-export-ride-gpx"
+description = "Enables the terra_export_ride_gpx command without any pre-configured scope."
+commands.allow = ["terra_export_ride_gpx"]
+
+[[permission]]
+identifier = "deny-terra-export-ride-gpx"
+description = "Denies the terra_export_ride_gpx command without any pre-configured scope."
+commands.deny = ["terra_export_ride_gpx"]

@@ -81,7 +81,22 @@ async fn dispatch_rpc_command(
     let args_val = args.unwrap_or_else(|| json!({}));
 
     match cmd {
-        "shim_log" => Ok(json!(null)),
+        "shim_log" => {
+            if let Some(kind) = args_val.get("kind").and_then(|v| v.as_str()) {
+                if kind.starts_with("auto-pair")
+                    || kind == "silent auto-pair prefers mode"
+                    || kind == "native-ble"
+                    || kind == "gatt.connect"
+                    || kind == "gatt.connected"
+                    || kind == "gatt.disconnect"
+                    || kind == "GATT operation failed"
+                {
+                    let detail = args_val.get("detail").cloned().unwrap_or(json!(null));
+                    println!("[shim] {kind}: {detail}");
+                }
+            }
+            Ok(json!(null))
+        }
 
         "addons_list" => {
             let list = crate::addons::addons_list(app.clone()).await;
@@ -258,7 +273,8 @@ async fn dispatch_rpc_command(
             let accept_all = args_val.get("acceptAll").and_then(|v| v.as_bool()).unwrap_or(false);
             let silent = args_val.get("silent").and_then(|v| v.as_bool()).unwrap_or(false);
             let owner = args_val.get("owner").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let dev = broker.request_device(filters, exclusions, accept_all, silent, owner).await?;
+            let exclude_ids: Vec<String> = serde_json::from_value(args_val.get("excludeIds").cloned().unwrap_or(json!([]))).unwrap_or_default();
+            let dev = broker.request_device(filters, exclusions, accept_all, silent, owner, exclude_ids).await?;
             serde_json::to_value(dev).map_err(|e| e.to_string())
         }
 
@@ -266,7 +282,8 @@ async fn dispatch_rpc_command(
             let ble_state: State<'_, crate::ble::Ble> = app.state();
             let broker = crate::ble::broker(&ble_state)?;
             let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?;
-            let svcs = broker.connect(id).await?;
+            let wait_visible = args_val.get("waitVisible").and_then(|v| v.as_bool()).unwrap_or(false);
+            let svcs = broker.connect_with_wait(id, wait_visible).await?;
             serde_json::to_value(svcs).map_err(|e| e.to_string())
         }
 
@@ -298,6 +315,40 @@ async fn dispatch_rpc_command(
             let broker = crate::ble::broker(&ble_state)?;
             let list = broker.devices_status().await;
             serde_json::to_value(list).map_err(|e| e.to_string())
+        }
+
+        "ble_native_scan_start" => {
+            let ble_state: State<'_, crate::ble::Ble> = app.state();
+            let broker = crate::ble::broker(&ble_state)?;
+            broker.set_native_scan(true).await?;
+            Ok(json!(null))
+        }
+
+        "ble_native_scan_stop" => {
+            let ble_state: State<'_, crate::ble::Ble> = app.state();
+            let broker = crate::ble::broker(&ble_state)?;
+            broker.set_native_scan(false).await?;
+            Ok(json!(null))
+        }
+
+        "ble_scan_candidates" => {
+            let ble_state: State<'_, crate::ble::Ble> = app.state();
+            let broker = crate::ble::broker(&ble_state)?;
+            let filter_uuids: Vec<String> = serde_json::from_value(
+                args_val.get("filterUuids").cloned().unwrap_or(json!([])),
+            )
+            .unwrap_or_default();
+            let list = broker.scan_candidates(filter_uuids).await;
+            serde_json::to_value(list).map_err(|e| e.to_string())
+        }
+
+        "ble_remember" => {
+            let ble_state: State<'_, crate::ble::Ble> = app.state();
+            let broker = crate::ble::broker(&ble_state)?;
+            let id = args_val.get("id").and_then(|v| v.as_str()).ok_or("missing id")?.to_string();
+            let name = args_val.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+            broker.remember_device(id, name).await?;
+            Ok(json!(null))
         }
 
         "ble_drop_device" => {
@@ -475,6 +526,25 @@ async fn dispatch_rpc_command(
             let row_count = args_val.get("rowCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             let payload = args_val.get("payload").and_then(|v| v.as_str()).ok_or("missing payload")?.to_string();
             crate::android_data_dir::terra_backup_ride(app.clone(), key, session_tag, max_dist, row_count, payload).await
+        }
+
+        "terra_list_ride_backups" => {
+            crate::android_data_dir::terra_list_ride_backups(app.clone()).await
+        }
+
+        "terra_read_ride_backup" => {
+            let filename = args_val.get("filename").and_then(|v| v.as_str()).ok_or("missing filename")?.to_string();
+            crate::android_data_dir::terra_read_ride_backup(app.clone(), filename).await
+        }
+
+        "terra_export_ride_gpx" => {
+            let filename = args_val.get("filename").and_then(|v| v.as_str()).ok_or("missing filename")?.to_string();
+            crate::android_data_dir::terra_export_ride_gpx(app.clone(), filename).await
+        }
+
+        "terra_delete_ride_backup" => {
+            let filename = args_val.get("filename").and_then(|v| v.as_str()).ok_or("missing filename")?.to_string();
+            crate::android_data_dir::terra_delete_ride_backup(app.clone(), filename).await
         }
 
         _ => Err(format!("Unknown RPC command: {cmd}")),

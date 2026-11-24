@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ble-scan-candidates"
+description = "Enables the ble_scan_candidates command without any pre-configured scope."
+commands.allow = ["ble_scan_candidates"]
+
+[[permission]]
+identifier = "deny-ble-scan-candidates"
+description = "Denies the ble_scan_candidates command without any pre-configured scope."
+commands.deny = ["ble_scan_candidates"]

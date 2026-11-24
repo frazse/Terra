@@ -56,7 +56,8 @@
 
   const devices = new Map();
   let silentNext = false; // set by auto-pair so Rust never opens the chooser
-  const autoPaired = new Set(); // device ids auto-pair has already handed to the page
+  const autoPaired = new Set(); // device ids already handed to the page on the current ride
+  const pageDeviceIds = new Set(); // non-addon devices currently paired to the page
 
   // Tiny in-page event bus shared with the addon loader.
   const bus = (() => {
@@ -172,7 +173,11 @@
       trace('connect', { id: this.device.id, name: this.device.name });
       this._connecting = (async () => {
         try {
+          // Wait for any in-flight ble_disconnect / unsubscribe from a previous ride to finish first.
+          await (opTail.get(this.device.id) || Promise.resolve());
           const tree = await call('ble_connect', { id: this.device.id }).catch((e) => {
+            autoPaired.delete(this.device.id);
+            pageDeviceIds.delete(this.device.id);
             throw new DOMException(String(e), 'NetworkError');
           });
           this.services = tree.map((s) => new RemoteService(this.device, s));
@@ -185,8 +190,12 @@
       return this._connecting;
     }
     disconnect() {
+      autoPaired.delete(this.device.id);
+      pageDeviceIds.delete(this.device.id);
       if (!this.connected) return;
+      trace('disconnect', { id: this.device.id, name: this.device.name });
       this.connected = false;
+      this.services = null;
       call('ble_disconnect', { id: this.device.id }).catch(() => {});
       bus.emit('ble:disconnected', { deviceId: this.device.id, name: this.device.name });
       this.device.dispatchEvent(new Event('gattserverdisconnected'));
@@ -244,18 +253,32 @@
       } else deliver();
     },
     disconnected(id) {
+      autoPaired.delete(id);
+      pageDeviceIds.delete(id);
       const d = devices.get(id);
-      if (!d || !d.gatt.connected) return;
-      d.gatt.connected = false;
-      bus.emit('ble:disconnected', { deviceId: id, name: d.name });
-      d.dispatchEvent(new Event('gattserverdisconnected'));
+      const wasConnected = !!(d && d.gatt.connected);
+      if (d) {
+        d.gatt.connected = false;
+        d.gatt.services = null;
+      }
+      // Always emit ble:disconnected so native-ble sees OS drops even if they happen mid-subscribe
+      // (before dev.gatt.connected flips to true).
+      bus.emit('ble:disconnected', { deviceId: id, name: d ? d.name : null });
+      if (wasConnected) {
+        d.dispatchEvent(new Event('gattserverdisconnected'));
+      }
+    },
+    autoConnected(id) {
+      bus.emit('ble:autoconnected', { deviceId: id });
     },
   };
 
+  let probingVirtual = false; // set by native bridge when probing addon requestDevice wrappers
   const bluetooth = {
     async getAvailability() { return true; },
     async getDevices() { return [...devices.values()]; },
     async requestDevice(options = {}) {
+      if (probingVirtual) throw notFound('virtual probe');
       log('requestDevice', options);
       const acceptAll = !!options.acceptAllDevices;
       const conv = (f) => ({
@@ -282,12 +305,29 @@
         }
       }
       let info;
-      try { info = await call('ble_request_device', { filters: reqFilters, exclusionFilters, acceptAll, silent, owner }); }
+      // Only exclude devices that are actually connected (or connecting) to the page right now,
+      // so a device that failed to connect or dropped from Biketerra while still OS-connected
+      // can always be re-paired cleanly.
+      const excludeIds = silent
+        ? [...autoPaired].filter((id) => {
+            const d = devices.get(id);
+            return d && (d.gatt.connected || d.gatt._connecting);
+          })
+        : [];
+      try { info = await call('ble_request_device', { filters: reqFilters, exclusionFilters, acceptAll, silent, owner, excludeIds }); }
       catch (e) { window.__terraSettled?.(false); throw notFound(e); }
-      if (silent) { // auto-pair: never hand the same device to the page twice
-        if (autoPaired.has(info.id)) { window.__terraSettled?.(false); throw notFound('already paired by auto-pair'); }
-        autoPaired.add(info.id);
+      if (silent) { // auto-pair: never hand an already-connected device to the page twice
+        const existing = devices.get(info.id);
+        if (existing && (existing.gatt.connected || existing.gatt._connecting)) {
+          window.__terraSettled?.(false);
+          throw notFound('already paired by auto-pair');
+        }
         window.__terraLastPaired = info.id;
+      }
+      if (!owner) {
+        // Track manual page pairings too so auto-pair doesn't re-click for an already-paired device.
+        pageDeviceIds.add(info.id);
+        autoPaired.add(info.id);
       }
       window.__terraSettled?.(true);
       let dev = devices.get(info.id);
@@ -299,12 +339,581 @@
     async requestLEScan() { throw new DOMException('Not supported', 'NotSupportedError'); },
     addEventListener() {}, removeEventListener() {},
   };
+  const baseRequestDevice = bluetooth.requestDevice;
+
+  // ---- Native BLE bridge (Biketerra's official window.isNative / window.native API) ----
+  // When active, Biketerra switches from Web Bluetooth chooser mode to native scan/auto-connect
+  // mode: entering /ride (new ride, resumed ride, or Ride 2) immediately connects already-connected
+  // and saved devices without opening any menu or clicking any DOM button.
+  // Active on Electron desktop (window.__terraDesktop) and Android (window.__terraAndroid).
+  const nativeMode = (!!window.__terraDesktop || !!window.__terraAndroid) && (() => {
+    try { return localStorage.getItem('terra.nativeBle') !== '0'; } catch { return true; }
+  })();
+
+  if (nativeMode) {
+    // Seed Biketerra's `saved-devices` synchronously BEFORE Biketerra's bundle evaluates it,
+    // so devices remembered in Terra auto-connect as soon as they are discovered.
+    try {
+      const seedIds = Array.isArray(window.__terraRememberedIds) ? [...window.__terraRememberedIds] : [];
+      seedIds.push('terra-zwift-ride-obc');
+      const saved = JSON.parse(localStorage.getItem('saved-devices') || '[]');
+      const seeded = JSON.parse(localStorage.getItem('terra.nativeSeeded') || '[]');
+      const savedSet = new Set(Array.isArray(saved) ? saved : []);
+      const seededSet = new Set(Array.isArray(seeded) ? seeded : []);
+      let changed = false;
+      for (const id of seedIds) {
+        if (!seededSet.has(id)) {
+          savedSet.add(id);
+          seededSet.add(id);
+          changed = true;
+        }
+      }
+      if (changed) {
+        localStorage.setItem('saved-devices', JSON.stringify([...savedSet]));
+        localStorage.setItem('terra.nativeSeeded', JSON.stringify([...seededSet]));
+      }
+    } catch {}
+
+    const nativeListeners = new Map(); // event -> Set<cb>
+    const nativeConnected = new Set(); // deviceIds currently connected through window.native
+    const nativeConnecting = new Set(); // deviceIds with an in-flight connect() call
+    const knownNames = new Map();      // deviceId -> name
+    const virtualDevices = new Map();  // deviceId -> mock BluetoothDevice from addon wrappers
+    const virtualChars = new Map();    // `${id}|${svc}|${chr}` -> mock characteristic
+    const virtualCharWired = new WeakSet();
+    const virtualDevWired = new WeakSet();
+    let scanPollTimer = null;
+    let scanBurstTimers = [];
+    let activeFilterUuids = [];
+    let emittedInScan = new Set();
+
+    const emitNative = (event, payload) => {
+      const cbs = nativeListeners.get(event);
+      if (!cbs) return;
+      for (const cb of [...cbs]) {
+        try { cb(payload); } catch (e) { console.error('[terra-native]', event, e); }
+      }
+    };
+
+    const autoPairEnabled = () => {
+      try { return localStorage.getItem('terra.autopair') !== '0'; } catch { return true; }
+    };
+
+    const matchesAutoTrainerPref = (name) => {
+      const pref = window.__terraPrefer && window.__terraPrefer[window.__terraMode || 'bike'];
+      if (!pref || !name) return true;
+      const otherMode = (window.__terraMode || 'bike') === 'row' ? 'bike' : 'row';
+      const otherPref = window.__terraPrefer && window.__terraPrefer[otherMode];
+      if (otherPref && name.startsWith(otherPref) && !name.startsWith(pref)) return false;
+      return true;
+    };
+
+    async function probeVirtualDevices() {
+      if (!navigator.bluetooth || navigator.bluetooth.requestDevice === baseRequestDevice) return [];
+      const found = [];
+      const probes = [
+        { filters: [{ services: ['d273f680-d548-419d-b9d1-fa0472345229'] }] }, // OBC shifter (zwift-ride)
+        { filters: [{ services: ['00001826-0000-1000-8000-00805f9b34fb'] }] }, // FTMS trainer (wifi-trainer-bridge)
+      ];
+      for (const opts of probes) {
+        probingVirtual = true;
+        try {
+          const dev = await navigator.bluetooth.requestDevice(opts);
+          if (dev && dev.id) {
+            virtualDevices.set(dev.id, dev);
+            if (dev.name) knownNames.set(dev.id, dev.name);
+            found.push(dev);
+          }
+        } catch {
+          // Expected when no addon intercepts this service
+        } finally {
+          probingVirtual = false;
+        }
+      }
+      return found;
+    }
+
+    async function pollScanCandidates() {
+      try {
+        const list = await call('ble_scan_candidates', { filterUuids: activeFilterUuids });
+        for (const c of list || []) {
+          if (c.name) knownNames.set(c.id, c.name);
+          if (!emittedInScan.has(c.id)) {
+            emittedInScan.add(c.id);
+            log('native-ble', { discovered: c.name || c.id, connected: !!c.connected, connecting: !!c.connecting });
+            emitNative('deviceDiscovered', { deviceId: c.id, deviceName: c.name ?? null });
+          }
+        }
+      } catch (e) {
+        log('native-ble', { scanPollError: String(e) });
+      }
+      const vdevs = await probeVirtualDevices();
+      for (const v of vdevs) {
+        if (!emittedInScan.has(v.id)) {
+          emittedInScan.add(v.id);
+          emitNative('deviceDiscovered', { deviceId: v.id, deviceName: v.name ?? null });
+        }
+      }
+    }
+
+    bus.on('ble:notify', ({ deviceId, characteristic, value }) => {
+      if (!nativeConnected.has(deviceId)) return;
+      if (virtualDevices.has(deviceId)) return; // virtual devices emit directly via characteristicvaluechanged
+      const u8 = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      emitNative('notifyValue', { deviceId, characteristicUuid: characteristic, value: u8 });
+    });
+
+    bus.on('ble:disconnected', ({ deviceId }) => {
+      emittedInScan.delete(deviceId);
+      if (!nativeConnected.delete(deviceId)) return;
+      log('native-ble', { dropout: deviceId });
+      emitNative('dropout', { deviceId });
+    });
+
+    bus.on('ble:autoconnected', async ({ deviceId }) => {
+      if (!deviceId || !autoPairEnabled()) return;
+      if (nativeConnected.has(deviceId) || nativeConnecting.has(deviceId)) return;
+      try {
+        const list = await call('ble_devices_status', {});
+        const d = (list || []).find((x) => x.id === deviceId);
+        if (!d || d.owner || !d.remembered || !d.connected) return;
+        if (!matchesAutoTrainerPref(d.name)) return;
+        if (d.name) knownNames.set(d.id, d.name);
+        emittedInScan.delete(d.id);
+        log('native-ble', { autoConnected: d.name || d.id });
+        emitNative('deviceDiscovered', { deviceId: d.id, deviceName: d.name ?? null });
+      } catch {}
+    });
+
+    // When an addon connects its own device (e.g. Zwift Ride controller waking up),
+    // re-probe for virtual devices (e.g. Terra Zwift Ride OBC) and advertise them.
+    // Probe across a few delays because addons may finish characteristic subscribes
+    // and handshakes (e.g. Zwift Ride "RideOn") 0.5–3 s after gatt.connect() resolves.
+    bus.on('ble:connected', ({ deviceId }) => {
+      if (nativeConnected.has(deviceId)) return;
+      for (const delay of [300, 1000, 2500, 5000]) {
+        setTimeout(async () => {
+          const vdevs = await probeVirtualDevices();
+          for (const v of vdevs) {
+            if (!nativeConnected.has(v.id) && !nativeConnecting.has(v.id)) {
+              log('native-ble', { discoveredVirtual: v.name || v.id });
+              emitNative('deviceDiscovered', { deviceId: v.id, deviceName: v.name ?? null });
+            }
+          }
+        }, delay);
+      }
+    });
+
+    const propsListOf = (p) => {
+      const out = [];
+      if (p.read) out.push('read');
+      if (p.write) out.push('write');
+      if (p.writeWithoutResponse) out.push('writeWithoutResponse');
+      if (p.notify) out.push('notify');
+      if (p.indicate) out.push('indicate');
+      return out;
+    };
+
+    window.isNative = true;
+    window.native = {
+      platform: window.__terraAndroid ? 'android' : 'linux',
+      version: 'terra',
+      listen(event, cb) {
+        if (!nativeListeners.has(event)) nativeListeners.set(event, new Set());
+        nativeListeners.get(event).add(cb);
+        return () => nativeListeners.get(event)?.delete(cb);
+      },
+      async invoke(cmd, args = {}) {
+        switch (cmd) {
+          case 'is_fullscreen':
+            return !!document.fullscreenElement;
+          case 'set_fullscreen':
+            if (args.fullscreen) {
+              if (!document.fullscreenElement && document.body?.requestFullscreen) {
+                await document.body.requestFullscreen().catch(() => {});
+              }
+            } else if (document.fullscreenElement && document.exitFullscreen) {
+              await document.exitFullscreen().catch(() => {});
+            }
+            return null;
+
+          case 'start_scan': {
+            activeFilterUuids = Array.isArray(args.filterUuids) ? args.filterUuids : [];
+            emittedInScan = new Set();
+            log('native-ble', { cmd: 'start_scan', filters: activeFilterUuids.length });
+            await call('ble_native_scan_start', {}).catch(() => {});
+            if (scanPollTimer) clearInterval(scanPollTimer);
+            for (const t of scanBurstTimers) clearTimeout(t);
+            scanBurstTimers = [];
+            // Start polling shortly after start_scan so Biketerra's initial get_connected_devices()
+            // resolves first before deviceDiscovered events fire.
+            scanBurstTimers.push(setTimeout(pollScanCandidates, 150));
+            scanBurstTimers.push(setTimeout(pollScanCandidates, 450));
+            scanBurstTimers.push(setTimeout(pollScanCandidates, 900));
+            scanPollTimer = setInterval(pollScanCandidates, 1000);
+            return null;
+          }
+
+          case 'stop_scan': {
+            if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
+            for (const t of scanBurstTimers) clearTimeout(t);
+            scanBurstTimers = [];
+            emittedInScan.clear();
+            log('native-ble', { cmd: 'stop_scan' });
+            await call('ble_native_scan_stop', {}).catch(() => {});
+            return null;
+          }
+
+          case 'get_connected_devices': {
+            if (window.__terraModeReady) {
+              await Promise.race([
+                Promise.resolve(window.__terraModeReady).catch(() => {}),
+                new Promise((r) => setTimeout(r, 4000)),
+              ]);
+            }
+            const out = [];
+            if (autoPairEnabled()) {
+              const statuses = await call('ble_devices_status', {}).catch(() => []);
+              for (const d of statuses || []) {
+                if (!d.remembered || d.owner || !(d.connected || d.connecting)) continue;
+                if (!matchesAutoTrainerPref(d.name)) continue;
+                if (d.name) knownNames.set(d.id, d.name);
+                out.push({ deviceId: d.id, deviceName: d.name ?? null });
+              }
+              const vdevs = await probeVirtualDevices();
+              for (const v of vdevs) {
+                if (!out.some((x) => x.deviceId === v.id)) {
+                  out.push({ deviceId: v.id, deviceName: v.name ?? null });
+                }
+              }
+            }
+            log('native-ble', { cmd: 'get_connected_devices', devices: out.map((x) => x.deviceName || x.deviceId) });
+            return out;
+          }
+
+          case 'connect': {
+            const deviceId = args.deviceId;
+            const filterSet = new Set((args.filterUuids || []).map((u) => uuid(u).toLowerCase()));
+            const vdev = virtualDevices.get(deviceId);
+            if (vdev) {
+              log('native-ble', { cmd: 'connect-virtual', deviceId, name: vdev.name });
+              await vdev.gatt.connect();
+              const svcs = await vdev.gatt.getPrimaryServices();
+              const services = {};
+              for (const s of svcs) {
+                const su = uuid(s.uuid).toLowerCase();
+                const charsObj = {};
+                const chars = await s.getCharacteristics().catch(() => []);
+                for (const c of chars) {
+                  const cu = uuid(c.uuid).toLowerCase();
+                  virtualChars.set(`${deviceId}|${su}|${cu}`, c);
+                  charsObj[cu] = { props: propsListOf(c.properties || {}) };
+                  if ((c.properties?.notify || c.properties?.indicate) && (filterSet.size === 0 || filterSet.has(cu))) {
+                    if (!virtualCharWired.has(c)) {
+                      virtualCharWired.add(c);
+                      c.addEventListener('characteristicvaluechanged', () => {
+                        if (!nativeConnected.has(deviceId) || !c.value) return;
+                        const dv = c.value;
+                        const u8 = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+                        emitNative('notifyValue', { deviceId, characteristicUuid: cu, value: u8 });
+                      });
+                    }
+                    await c.startNotifications().catch(() => {});
+                  }
+                }
+                services[su] = charsObj;
+              }
+              if (!virtualDevWired.has(vdev)) {
+                virtualDevWired.add(vdev);
+                vdev.addEventListener('gattserverdisconnected', () => {
+                  if (nativeConnected.delete(deviceId)) emitNative('dropout', { deviceId });
+                });
+              }
+              nativeConnected.add(deviceId);
+              return { deviceId, deviceName: vdev.name ?? null, services };
+            }
+
+            const tConnect0 = performance.now();
+            log('native-ble', { cmd: 'connect', deviceId, name: knownNames.get(deviceId) ?? null });
+            nativeConnecting.add(deviceId);
+            try {
+              await (opTail.get(deviceId) || Promise.resolve());
+              const tree = await call('ble_connect', { id: deviceId, waitVisible: true });
+              const connectMs = Math.round(performance.now() - tConnect0);
+              if (!Array.isArray(tree) || tree.length === 0) {
+                throw new Error('no GATT services discovered');
+              }
+              const deviceName = knownNames.get(deviceId) ?? devices.get(deviceId)?.name ?? null;
+              call('ble_remember', { id: deviceId, name: deviceName }).catch(() => {});
+
+              let dev = devices.get(deviceId);
+              if (!dev) { dev = new TerraBluetoothDevice({ id: deviceId, name: deviceName }); devices.set(deviceId, dev); }
+              else if (deviceName && !dev.name) { dev.name = deviceName; }
+
+              const services = {};
+              const hasFtms = tree.some((s) => uuid(s.uuid).toLowerCase() === '00001826-0000-1000-8000-00805f9b34fb');
+              // Match Biketerra's driver selection (`Ht` in BjsG8Fg_.js): when FTMS (0x1826) is
+              // present, Biketerra ignores Wahoo proprietary control (a026e005), CPS (2a63), CSC
+              // (2a5b), and FE-C (6e40fec2). Subscribing to unused control/data characteristics
+              // (especially Wahoo a026e005 alongside FTMS 2ad9) adds noise and can destabilize
+              // KICKR firmware.
+              const skipWhenFtms = new Set([
+                'a026e005-0a7d-4ab3-97fa-f1500f9feb8b',
+                '00002a63-0000-1000-8000-00805f9b34fb',
+                '00002a5b-0000-1000-8000-00805f9b34fb',
+                '6e40fec2-b5a3-f393-e0a9-e50e24dcca9e',
+              ]);
+              const toSubscribe = [];
+              for (const s of tree) {
+                const su = uuid(s.uuid).toLowerCase();
+                const charsObj = {};
+                for (const c of s.characteristics) {
+                  const cu = uuid(c.uuid).toLowerCase();
+                  charsObj[cu] = { props: propsListOf(c) };
+                  if (
+                    (c.notify || c.indicate) &&
+                    (filterSet.size === 0 || filterSet.has(cu)) &&
+                    !(hasFtms && skipWhenFtms.has(cu))
+                  ) {
+                    toSubscribe.push({ service: su, characteristic: cu });
+                  }
+                }
+                services[su] = charsObj;
+              }
+              nativeConnected.add(deviceId);
+              const tSub0 = performance.now();
+              let subOk = 0;
+              for (const sub of toSubscribe) {
+                if (!nativeConnected.has(deviceId)) {
+                  throw new Error('device disconnected during subscribe');
+                }
+                const doSub = () => gattOp(
+                  deviceId,
+                  () => call('ble_subscribe', { id: deviceId, service: sub.service, characteristic: sub.characteristic }),
+                  false,
+                  'subscribe ' + sub.characteristic,
+                );
+                try {
+                  await doSub();
+                  subOk++;
+                } catch (e) {
+                  const msg = String(e);
+                  log('native-ble', { subscribeFailed: sub.characteristic, error: msg });
+                  if (!nativeConnected.has(deviceId) || /disconnected|not connected/i.test(msg)) {
+                    nativeConnected.delete(deviceId);
+                    emittedInScan.delete(deviceId);
+                    throw new Error('device disconnected during subscribe: ' + msg);
+                  }
+                  // One brief retry for transient BlueZ ATT errors (e.g. 0x0e) while still connected.
+                  await new Promise((r) => setTimeout(r, 300));
+                  if (!nativeConnected.has(deviceId)) {
+                    emittedInScan.delete(deviceId);
+                    throw new Error('device disconnected during subscribe');
+                  }
+                  try {
+                    await doSub();
+                    subOk++;
+                  } catch (e2) {
+                    const msg2 = String(e2);
+                    log('native-ble', { subscribeRetryFailed: sub.characteristic, error: msg2 });
+                    if (!nativeConnected.has(deviceId) || /disconnected|not connected/i.test(msg2)) {
+                      nativeConnected.delete(deviceId);
+                      emittedInScan.delete(deviceId);
+                      throw new Error('device disconnected during subscribe: ' + msg2);
+                    }
+                  }
+                }
+              }
+              if (!nativeConnected.has(deviceId) || (toSubscribe.length > 0 && subOk === 0)) {
+                nativeConnected.delete(deviceId);
+                emittedInScan.delete(deviceId);
+                throw new Error('characteristic subscriptions failed');
+              }
+              const subMs = Math.round(performance.now() - tSub0);
+              const totalMs = Math.round(performance.now() - tConnect0);
+              // Expose the connected GATT server to addons only after subscriptions finish so
+              // addons (e.g. realistic-gears) don't interleave writes mid-subscribe.
+              dev.gatt.services = tree.map((s) => new RemoteService(dev, s));
+              dev.gatt.connected = true;
+              bus.emit('ble:paired', { deviceId, name: deviceName });
+              bus.emit('ble:connected', { deviceId, name: deviceName });
+              log('native-ble', {
+                cmd: 'connected',
+                deviceId,
+                services: Object.keys(services).length,
+                subs: subOk,
+                connectMs,
+                subMs,
+                totalMs,
+              });
+              return { deviceId, deviceName, services };
+            } finally {
+              nativeConnecting.delete(deviceId);
+            }
+          }
+
+          case 'disconnect': {
+            const deviceId = args.deviceId;
+            log('native-ble', { cmd: 'disconnect', deviceId });
+            nativeConnected.delete(deviceId);
+            emittedInScan.delete(deviceId);
+            const vdev = virtualDevices.get(deviceId);
+            if (vdev) {
+              try { vdev.gatt.disconnect(); } catch {}
+              return null;
+            }
+            const d = devices.get(deviceId);
+            if (d) {
+              d.gatt.connected = false;
+              d.gatt.services = null;
+            }
+            await gattOp(deviceId, () => call('ble_disconnect', { id: deviceId }), false, 'disconnect').catch(() => {});
+            bus.emit('ble:disconnected', { deviceId, name: d ? d.name : null });
+            return null;
+          }
+
+          case 'read_value': {
+            const { deviceId, serviceUuid, characteristicUuid } = args;
+            const su = uuid(serviceUuid).toLowerCase();
+            const cu = uuid(characteristicUuid).toLowerCase();
+            const vchr = virtualChars.get(`${deviceId}|${su}|${cu}`);
+            if (vchr) {
+              const dv = await vchr.readValue();
+              return new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+            }
+            const b64 = await gattOp(
+              deviceId,
+              () => call('ble_read', { id: deviceId, service: su, characteristic: cu }),
+              false,
+              'read ' + cu,
+            );
+            const dv = toDV(b64);
+            return new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+          }
+
+          case 'write_value':
+          case 'write_value_without_response': {
+            const { deviceId, serviceUuid, characteristicUuid, value } = args;
+            const withResponse = cmd === 'write_value';
+            const su = uuid(serviceUuid).toLowerCase();
+            const cu = uuid(characteristicUuid).toLowerCase();
+            const vchr = virtualChars.get(`${deviceId}|${su}|${cu}`);
+            if (vchr) {
+              return withResponse ? vchr.writeValueWithResponse(value) : vchr.writeValueWithoutResponse(value);
+            }
+            const b64 = toB64(value);
+            await gattOp(
+              deviceId,
+              () => call('ble_write', { id: deviceId, service: su, characteristic: cu, value: b64, withResponse }),
+              true,
+              'write ' + cu,
+            );
+            return null;
+          }
+
+          default:
+            log('native-ble', { unknownCmd: cmd, args });
+            return null;
+        }
+      },
+    };
+    log('native-ble', { installed: true, seeded: (window.__terraRememberedIds || []).length });
+  }
 
   // ---- auto-pair: press Biketerra's own "Pair device..." button for remembered devices ----
-  (() => {
+  // Skipped when Biketerra's native BLE bridge (`nativeMode`) is active.
+  if (!nativeMode) (() => {
     const enabled = () => { try { return localStorage.getItem('terra.autopair') !== '0'; } catch { return true; } };
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    let ranFor = null, running = false, timer = null;
+    const rideKey = () => location.pathname;
+    let lastRideKey = null, completedRideKey = null, lastBtnEl = null;
+    let running = false, timer = null, resumeTimer = null, needsRetry = false;
+    let autoOpenCount = 0;
+    const triedAutoOpenIds = new Set();
+
+    const resetRideState = () => {
+      // Unsubscribe/detach page-owned devices when leaving a ride so starting a second ride
+      // performs a clean ble_connect + fresh notify stream (Rust keeps the OS BLE link warm
+      // for remembered devices, so reconnect is instant). Addon-owned devices are untouched.
+      for (const id of [...pageDeviceIds]) {
+        const d = devices.get(id);
+        if (d) {
+          d.gatt.connected = false;
+          d.gatt.services = null;
+        }
+        gattOp(id, () => call('ble_disconnect', { id }), false, 'disconnect').catch(() => {});
+      }
+      pageDeviceIds.clear();
+      autoPaired.clear();
+      triedAutoOpenIds.clear();
+      completedRideKey = null;
+      lastBtnEl = null;
+      needsRetry = false;
+      autoOpenCount = 0;
+      if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
+    };
+
+    const syncRoute = () => {
+      const onRide = location.pathname.startsWith('/ride');
+      if (!onRide) {
+        if (lastRideKey !== null || autoPaired.size > 0 || pageDeviceIds.size > 0) resetRideState();
+        lastRideKey = null;
+        return false;
+      }
+      const key = rideKey();
+      if (lastRideKey !== key) {
+        resetRideState();
+        lastRideKey = key;
+        // On a resumed ride, Biketerra often auto-closes the Devices menu immediately.
+        // Schedule a check that reopens it briefly if remembered devices are ready at BLE level.
+        scheduleResumeOpen(900);
+      }
+      return true;
+    };
+
+    const scheduleResumeOpen = (delayMs) => {
+      if (resumeTimer) clearTimeout(resumeTimer);
+      resumeTimer = setTimeout(() => {
+        resumeTimer = null;
+        maybeAutoOpenForResume();
+      }, delayMs);
+    };
+
+    bus.on('ble:disconnected', (e) => {
+      if (e && e.deviceId) {
+        autoPaired.delete(e.deviceId);
+        pageDeviceIds.delete(e.deviceId);
+        triedAutoOpenIds.delete(e.deviceId);
+      }
+      needsRetry = true;
+      lastBtnEl = null;
+      if (!timer) timer = setTimeout(check, 250);
+    });
+
+    bus.on('ble:autoconnected', (e) => {
+      const id = e && e.deviceId;
+      if (!id || !enabled() || !location.pathname.startsWith('/ride')) return;
+      if (autoPaired.has(id) && devices.get(id)?.gatt?.connected) return;
+      triedAutoOpenIds.delete(id);
+      needsRetry = true;
+      lastBtnEl = null;
+      if (findBtn()) {
+        if (!timer) timer = setTimeout(check, 150);
+      } else {
+        scheduleResumeOpen(350);
+      }
+    });
+
+    const isVisible = (el) => {
+      if (!el || !el.isConnected) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return false;
+      try {
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+      } catch {}
+      return true;
+    };
 
     const findBtn = () => {
       let best = null;
@@ -313,8 +922,35 @@
         if (!t.startsWith('pair device') || t.length > 40) continue;
         if (!best || best.contains(el)) best = el; // prefer the innermost match
       }
-      return best && (best.closest('button, [role="button"], a') || best);
+      const btn = best && (best.closest('button, [role="button"], a') || best);
+      return isVisible(btn) ? btn : null;
     };
+
+    const findDevicesTab = () => {
+      for (const el of document.querySelectorAll('button, [role="tab"], [role="button"]')) {
+        if (!isVisible(el)) continue;
+        const t = (el.innerText || '').trim().toLowerCase();
+        if (t === 'devices') return el;
+      }
+      return null;
+    };
+
+    const hasModalPrompt = () => {
+      for (const el of document.querySelectorAll('button, [role="button"]')) {
+        if (!isVisible(el)) continue;
+        const t = (el.innerText || '').trim().toLowerCase();
+        if (t === 'resume' || t === 'resume ride' || t === 'discard') return true;
+      }
+      return false;
+    };
+
+    const sendKey = (key, code, keyCode) => {
+      const target = document.body || document.documentElement;
+      const init = { key, code, keyCode, which: keyCode, bubbles: true, cancelable: true, composed: true };
+      target.dispatchEvent(new KeyboardEvent('keydown', init));
+      target.dispatchEvent(new KeyboardEvent('keyup', init));
+    };
+
     const press = (el) => {
       const r = el.getBoundingClientRect();
       const x = r.left + r.width / 2, y = r.top + r.height / 2;
@@ -341,9 +977,86 @@
       const off = bus.on('ble:connected', (e) => { if (e.deviceId === id) { off(); clearTimeout(t); res(true); } });
     });
 
-    async function run() {
+    async function waitForBtn(ms) {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline) {
+        const b = findBtn();
+        if (b) return b;
+        await sleep(50);
+      }
+      return findBtn();
+    }
+
+    async function maybeAutoOpenForResume() {
+      if (running || !enabled() || !syncRoute()) return;
+      const key = rideKey();
+      if (autoOpenCount >= 3) return;
+      if (document.querySelector('.terra-overlay, .terra-chooser-overlay')) return;
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+      if (hasModalPrompt()) {
+        // Pre-ride Resume/Discard prompt is still up; wait until the user answers it.
+        scheduleResumeOpen(1000);
+        return;
+      }
+      if (findBtn()) {
+        if (!timer) timer = setTimeout(check, 100);
+        return;
+      }
+      const statuses = await call('ble_devices_status', {}).catch(() => []);
+      if (running || !syncRoute() || rideKey() !== key) return;
+      const ready = (statuses || []).filter((d) =>
+        d.remembered && !d.owner && d.connected &&
+        !triedAutoOpenIds.has(d.id) &&
+        !(devices.get(d.id)?.gatt?.connected) &&
+        !(devices.get(d.id)?.gatt?._connecting)
+      );
+      if (!ready.length) return;
+      if (findBtn()) {
+        run(key, { closeAfter: false });
+        return;
+      }
+
+      autoOpenCount++;
+      for (const d of ready) triedAutoOpenIds.add(d.id);
+      log('auto-pair resume-menu', { action: 'open', ready: ready.map((d) => d.name || d.id) });
+      sendKey('m', 'KeyM', 77);
+      let btn = await waitForBtn(550);
+      if (!btn) {
+        const tab = findDevicesTab();
+        if (tab) {
+          press(tab);
+          btn = await waitForBtn(400);
+        }
+      }
+      if (!btn) {
+        const menuBtn = [...document.querySelectorAll('button[aria-label*="menu" i], button[title*="menu" i], [role="button"][aria-label*="menu" i]')]
+          .find((el) => isVisible(el));
+        if (menuBtn) {
+          press(menuBtn);
+          btn = await waitForBtn(500);
+          if (!btn) {
+            const tab = findDevicesTab();
+            if (tab) {
+              press(tab);
+              btn = await waitForBtn(400);
+            }
+          }
+        }
+      }
+      log('auto-pair resume-menu', { opened: !!btn });
+      if (!btn || running || rideKey() !== key) return;
+      await run(key, { closeAfter: true });
+    }
+
+    async function run(triggerKey, opts = {}) {
+      const closeAfter = !!opts.closeAfter;
       if (running || !enabled()) return;
+      if (!syncRoute() || rideKey() !== triggerKey) return;
       running = true;
+      let pairedAny = false;
+      let buttonDisappeared = false;
+      let exhausted = false;
       try {
         // Give auto-trainer a bounded moment to decide bike vs row (it publishes
         // window.__terraModeReady; worst case is its ~3 s "is the Ride controller
@@ -356,9 +1069,17 @@
           ]);
           log('auto-pair waited for mode', { how, mode: window.__terraMode || null });
         }
+        let emptyRetries = 0;
+        const attemptsById = new Map();
         for (let i = 0; i < 6; i++) {
+          if (rideKey() !== triggerKey) break;
+          if (document.querySelector('.terra-chooser-overlay, .terra-overlay')) break;
           const b = findBtn();
-          if (!b) break;
+          if (!b) {
+            buttonDisappeared = true;
+            break;
+          }
+          lastBtnEl = b;
           silentNext = true;
           const settled = new Promise((res) => {
             window.__terraSettled = res;
@@ -374,21 +1095,79 @@
           silentNext = false;
           window.__terraSettled = null;
           log('auto-pair', { attempt: i + 1, paired: ok });
-          if (!ok) break;
-          await waitConnected(window.__terraLastPaired, 10000); // let the page finish connecting first
-          await sleep(500);
+          if (ok) {
+            pairedAny = true;
+            emptyRetries = 0;
+            const pairedId = window.__terraLastPaired;
+            const seenCount = (attemptsById.get(pairedId) || 0) + 1;
+            attemptsById.set(pairedId, seenCount);
+            await waitConnected(pairedId, 10000); // let the page finish connecting first
+            await sleep(600); // give Biketerra time to subscribe before trying the next device
+            if (seenCount >= 2 && !(devices.get(pairedId)?.gatt?.connected)) {
+              log('auto-pair', { stopped: 'device rejected twice', id: pairedId });
+              exhausted = true;
+              break;
+            }
+            continue;
+          }
+          // On a cold start, the BLE scan may still be discovering/connecting remembered
+          // devices when /ride first opens: retry while the Pair panel stays open.
+          const anyPageConnected = [...pageDeviceIds].some((id) => devices.get(id)?.gatt?.connected);
+          if (!closeAfter && !pairedAny && !anyPageConnected && emptyRetries < 6 && findBtn()) {
+            emptyRetries++;
+            await sleep(1500);
+            i--;
+            continue;
+          }
+          exhausted = true;
+          break;
         }
-      } finally { running = false; silentNext = false; }
+        const anyPageConnectedNow = [...pageDeviceIds].some((id) => devices.get(id)?.gatt?.connected);
+        if (exhausted && !buttonDisappeared && (pairedAny || anyPageConnectedNow)) {
+          completedRideKey = triggerKey;
+          needsRetry = false;
+        } else if (exhausted && !buttonDisappeared && emptyRetries >= 6) {
+          // Stay quiet for this button instance, but allow auto-pair again if the panel
+          // closes and reopens later (e.g. after powering on a trainer/HR strap).
+          needsRetry = false;
+        }
+        if (closeAfter && rideKey() === triggerKey && findBtn()) {
+          log('auto-pair resume-menu', { action: 'close', pairedAny });
+          sendKey('Escape', 'Escape', 27);
+        }
+      } finally {
+        running = false;
+        silentNext = false;
+        if (needsRetry && rideKey() === triggerKey && findBtn()) {
+          // A device finished auto-connecting (or disconnected) while we were mid-run.
+          if (!timer) timer = setTimeout(check, 250);
+        } else if (buttonDisappeared && !closeAfter && rideKey() === triggerKey) {
+          // The Pair panel closed automatically (e.g. resumed ride) before finishing:
+          // check shortly whether any remembered BLE device still needs pairing.
+          scheduleResumeOpen(600);
+        }
+      }
     }
 
     const check = () => {
       timer = null;
-      if (!location.pathname.startsWith('/ride') || ranFor === location.href) return;
-      if (!findBtn()) return;
-      ranFor = location.href;
-      setTimeout(run, 800);
+      if (!syncRoute() || running) return;
+      if (document.querySelector('.terra-chooser-overlay, .terra-overlay')) return;
+      const b = findBtn();
+      if (!b) {
+        lastBtnEl = null;
+        return;
+      }
+      const key = rideKey();
+      const alreadyDone = completedRideKey === key && !needsRetry;
+      if (alreadyDone) return;
+      if (b === lastBtnEl && !needsRetry) return;
+      lastBtnEl = b;
+      setTimeout(() => run(key), 150);
     };
-    new MutationObserver(() => { if (!timer) timer = setTimeout(check, 500); })
+    addEventListener('popstate', () => { if (!timer) timer = setTimeout(check, 150); });
+    addEventListener('hashchange', () => { if (!timer) timer = setTimeout(check, 150); });
+    new MutationObserver(() => { if (!timer) timer = setTimeout(check, 100); })
       .observe(document, { childList: true, subtree: true, characterData: true });
   })();
 

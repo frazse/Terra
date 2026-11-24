@@ -286,6 +286,51 @@ fn props_from_peripheral(p: &Peripheral, props: &PeripheralProperties) -> Discov
     }
 }
 
+/// Returns true only when BlueZ has resolved at least one non-generic GATT service
+/// (anything other than 0x1800/0x1801/0x180a) with characteristics, so we never hand
+/// Biketerra a half-discovered peripheral that it immediately disconnects.
+#[cfg(not(target_os = "android"))]
+fn services_ready(p: &Peripheral) -> bool {
+    p.services().iter().any(|s| {
+        let short = su(&s.uuid);
+        short != "1800" && short != "1801" && short != "180a" && !s.characteristics.is_empty()
+    })
+}
+
+#[cfg(not(target_os = "android"))]
+fn gatt_counts(p: &Peripheral) -> (usize, usize, usize) {
+    let svcs = p.services();
+    let chars: usize = svcs.iter().map(|s| s.characteristics.len()).sum();
+    let descs: usize = svcs
+        .iter()
+        .flat_map(|s| s.characteristics.iter())
+        .map(|c| c.descriptors.len())
+        .sum();
+    (svcs.len(), chars, descs)
+}
+
+/// Returns true once every NOTIFY/INDICATE characteristic on non-generic services has
+/// at least one descriptor (its 0x2902 CCCD) populated by BlueZ. Calling StartNotify
+/// before BlueZ finishes descriptor discovery causes `ATT error: 0x0e` and link drop.
+#[cfg(not(target_os = "android"))]
+fn cccd_ready(p: &Peripheral) -> bool {
+    for s in p.services() {
+        let short = su(&s.uuid);
+        if short == "1800" || short == "1801" || short == "180a" {
+            continue;
+        }
+        for c in s.characteristics {
+            if (c.properties.contains(CharPropFlags::NOTIFY)
+                || c.properties.contains(CharPropFlags::INDICATE))
+                && c.descriptors.is_empty()
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 // ---------- wire types ----------
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -300,6 +345,8 @@ pub struct BleDeviceStatus {
     pub name: Option<String>,
     pub owner: Option<String>,
     pub connected: bool,
+    #[serde(default)]
+    pub connecting: bool,
     pub remembered: bool,
 }
 
@@ -355,14 +402,32 @@ pub struct Broker {
     /// `None` on Linux (RPC mode has no webview); `Some` on other platforms.
     app: Option<AppHandle>,
     adapter: Adapter,
+    /// Direct BlueZ session on Linux so discovery uses `Transport::Le` instead of
+    /// `btleplug`'s hardcoded `Transport::Auto` (which runs Classic BR/EDR Inquiry
+    /// and starves active BLE trainer links for 2+ seconds until supervision timeout).
+    #[cfg(target_os = "linux")]
+    bluez: Option<(bluez_async::BluetoothSession, bluez_async::AdapterId)>,
     peripherals: Mutex<HashMap<String, Peripheral>>,
     notify_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
     subs: Mutex<HashSet<(String, String)>>, // (device id, characteristic uuid)
     pub known: Mutex<Vec<Remembered>>,
     connecting: Mutex<HashSet<String>>,
-    /// One lock per device so only one connect runs at a time (see `connect`).
-    #[allow(dead_code)]
-    conn_locks: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
+    /// Serializes adapter-level `connect()` calls between supervisor and page/addons
+    /// (Linux BlueZ rejects overlapping HCI LE Create Connection calls with `InProgress`).
+    connect_gate: Mutex<()>,
+    /// Tracks whether `adapter.start_scan` is currently active so we can pause scanning
+    /// before calling `connect()`.
+    scanning: AtomicBool,
+    /// True while Biketerra's native BLE bridge (`window.native`) has an active scan running.
+    native_scanning: AtomicBool,
+    /// Per-device backoff timestamps so failed/timed-out BlueZ connects aren't hammered every 3 s.
+    retry_after: Mutex<HashMap<String, std::time::Instant>>,
+    /// Timestamp of the last OS-level disconnect per device, so post-dropout reconnects
+    /// let BlueZ & the peripheral settle briefly before dialing again.
+    disconnected_at: Mutex<HashMap<String, std::time::Instant>>,
+    /// Hold off restarting background/native LE discovery briefly right after a connect
+    /// completes so characteristic subscriptions + FTMS RequestControl aren't stalled.
+    scan_holdoff_until: Mutex<Option<std::time::Instant>>,
     pending: Mutex<Option<Pending>>,
     /// Addon ids that currently let the page use their devices (see `ble_release`).
     pub released: Mutex<HashSet<String>>,
@@ -395,15 +460,40 @@ impl Broker {
             .unwrap_or_default();
         println!("[terra] {} remembered device(s), store: {}", known.len(), store.display());
 
+        #[cfg(target_os = "linux")]
+        let bluez = match bluez_async::BluetoothSession::new().await {
+            Ok((handle, session)) => {
+                spawn_task(async move {
+                    let _ = handle.await;
+                });
+                match session.get_adapters().await {
+                    Ok(mut adapters) if !adapters.is_empty() => {
+                        let aid = adapters.remove(0).id;
+                        println!("[terra] BlueZ LE-only scan session ready");
+                        Some((session, aid))
+                    }
+                    _ => None,
+                }
+            }
+            Err(_) => None,
+        };
+
         let b = Arc::new(Self {
             app: app,
             adapter,
+            #[cfg(target_os = "linux")]
+            bluez,
             peripherals: Mutex::new(HashMap::new()),
             notify_tasks: Mutex::new(HashMap::new()),
             subs: Mutex::new(HashSet::new()),
             known: Mutex::new(known),
             connecting: Mutex::new(HashSet::new()),
-            conn_locks: Mutex::new(HashMap::new()),
+            connect_gate: Mutex::new(()),
+            scanning: AtomicBool::new(false),
+            native_scanning: AtomicBool::new(false),
+            retry_after: Mutex::new(HashMap::new()),
+            disconnected_at: Mutex::new(HashMap::new()),
+            scan_holdoff_until: Mutex::new(None),
             pending: Mutex::new(None),
             released: Mutex::new(HashSet::new()),
             shutting_down: AtomicBool::new(false),
@@ -415,6 +505,232 @@ impl Broker {
         Ok(b)
     }
 
+    /// Starts LE-only discovery on Linux (`Transport::Le`) to avoid `btleplug`'s
+    /// `Transport::Auto` running Classic Bluetooth BR/EDR Inquiry, which stalls
+    /// active BLE connections for 2+ seconds and triggers `OS disconnected`.
+    async fn adapter_start_le_scan(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Some((ref session, ref aid)) = self.bluez {
+            let filter = bluez_async::DiscoveryFilter {
+                transport: Some(bluez_async::Transport::Le),
+                duplicate_data: Some(true),
+                ..Default::default()
+            };
+            return session
+                .start_discovery_on_adapter_with_filter(aid, &filter)
+                .await
+                .is_ok();
+        }
+        self.adapter.start_scan(ScanFilter::default()).await.is_ok()
+    }
+
+    async fn adapter_stop_le_scan(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some((ref session, ref aid)) = self.bluez {
+            let _ = timeout(Duration::from_secs(2), session.stop_discovery_on_adapter(aid)).await;
+            return;
+        }
+        let _ = timeout(Duration::from_secs(2), self.adapter.stop_scan()).await;
+    }
+
+    async fn pause_scan_for_connect(&self) {
+        if self.scanning.swap(false, Ordering::SeqCst) {
+            self.adapter_stop_le_scan().await;
+            sleep(Duration::from_millis(150)).await;
+        }
+    }
+
+    /// Starts LE discovery only when no connect/service-discovery holds `connect_gate`.
+    /// Prevents concurrent `StartDiscovery` + `Device1.Connect` / `discover_services`
+    /// collisions on Linux BlueZ that trigger `Service discovery timed out`.
+    async fn start_scan_if_idle(&self) -> bool {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return false;
+        }
+        if self.scanning.load(Ordering::SeqCst) {
+            return true;
+        }
+        let Ok(_gate) = self.connect_gate.try_lock() else {
+            return false;
+        };
+        if self.shutting_down.load(Ordering::SeqCst) || self.scanning.load(Ordering::SeqCst) {
+            return self.scanning.load(Ordering::SeqCst);
+        }
+        let ok = self.adapter_start_le_scan().await;
+        self.scanning.store(ok, Ordering::SeqCst);
+        ok
+    }
+
+    /// Connects to `p` (with LE discovery paused) and ensures its GATT table is resolved.
+    ///
+    /// Critical Linux BlueZ workaround: `btleplug`'s `p.connect()` delegates to
+    /// `bluez_async::BluetoothSession::connect_with_timeout`, which waits on
+    /// `ServicesResolved` with a hardcoded 5 s timeout (`SERVICE_DISCOVERY_TIMEOUT`).
+    /// For peripherals with large GATT tables (e.g. Wahoo KICKR CORE's 12 services),
+    /// `Device1.Connect()` frequently succeeds while GATT discovery takes 5.5–9 s,
+    /// causing `p.connect()` to return `Err("Service discovery timed out")` while the
+    /// BLE link is actually UP and still resolving! Instead of aborting and leaving
+    /// BlueZ half-connected, we detect that case and continue polling `discover_services()`
+    /// until the GATT table finishes populating and stabilizes.
+    async fn connect_and_discover(&self, id: &str, p: &Peripheral) -> Result<(), String> {
+        let mut slow_discovery = false;
+        if !p.is_connected().await.unwrap_or(false) {
+            // Fresh link: any previously tracked subscriptions are stale.
+            self.subs.lock().await.retain(|(d, _)| d != id);
+            self.pause_scan_for_connect().await;
+            match timeout(Duration::from_secs(15), p.connect()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let msg = e.to_string();
+                    let is_sd_timeout = msg.to_lowercase().contains("service discovery timed out");
+                    if is_sd_timeout && p.is_connected().await.unwrap_or(false) {
+                        println!(
+                            "[ble] {id}: connect() hit 5s service-discovery timeout while connected; waiting for GATT table..."
+                        );
+                        slow_discovery = true;
+                    } else {
+                        if p.is_connected().await.unwrap_or(false) {
+                            let _ = timeout(Duration::from_secs(3), p.disconnect()).await;
+                            self.disconnected_at
+                                .lock()
+                                .await
+                                .insert(id.to_string(), std::time::Instant::now());
+                            sleep(Duration::from_millis(300)).await;
+                        }
+                        return Err(msg);
+                    }
+                }
+                Err(_) => {
+                    if p.is_connected().await.unwrap_or(false) {
+                        let _ = timeout(Duration::from_secs(3), p.disconnect()).await;
+                        self.disconnected_at
+                            .lock()
+                            .await
+                            .insert(id.to_string(), std::time::Instant::now());
+                        sleep(Duration::from_millis(300)).await;
+                    }
+                    return Err("connect timed out".to_string());
+                }
+            }
+        } else if !services_ready(p) {
+            slow_discovery = true;
+        }
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err("BLE broker is shutting down".into());
+        }
+        self.ensure_services_ready(id, p, slow_discovery).await
+    }
+
+    /// Resolves GATT services on a connected peripheral. When `slow_discovery` is true
+    /// (because `bluez-async` hit its 5 s `ServicesResolved` timeout while connected),
+    /// polls BlueZ's D-Bus GATT objects for up to 10 s and waits for the service +
+    /// characteristic count to stabilize across two consecutive polls so we never hand
+    /// Biketerra a partial GATT table. Disconnects `p` cleanly on persistent failure so
+    /// BlueZ is never left wedged in a 0-service connected state.
+    async fn ensure_services_ready(
+        &self,
+        id: &str,
+        p: &Peripheral,
+        slow_discovery: bool,
+    ) -> Result<(), String> {
+        if !slow_discovery && services_ready(p) {
+            return Ok(());
+        }
+        let deadline = std::time::Instant::now()
+            + Duration::from_secs(if slow_discovery { 10 } else { 6 });
+        let mut last_err: Option<String> = None;
+        let mut stable_counts: Option<(usize, usize, usize)> = None;
+        let mut stable_ticks: u8 = 0;
+        let mut first = true;
+
+        while std::time::Instant::now() < deadline {
+            if self.shutting_down.load(Ordering::SeqCst) {
+                return Err("BLE broker is shutting down".into());
+            }
+            if !p.is_connected().await.unwrap_or(false) {
+                self.disconnected_at
+                    .lock()
+                    .await
+                    .insert(id.to_string(), std::time::Instant::now());
+                return Err("peripheral disconnected during service discovery".into());
+            }
+            if first {
+                first = false;
+                if slow_discovery {
+                    sleep(Duration::from_millis(200)).await;
+                }
+            } else {
+                sleep(Duration::from_millis(if slow_discovery { 300 } else { 250 })).await;
+            }
+            match timeout(Duration::from_secs(5), p.discover_services()).await {
+                Ok(Ok(())) => {
+                    if services_ready(p) {
+                        if !slow_discovery {
+                            return Ok(());
+                        }
+                        if !cccd_ready(p) {
+                            stable_counts = None;
+                            stable_ticks = 0;
+                            continue;
+                        }
+                        let counts = gatt_counts(p);
+                        if stable_counts == Some(counts) {
+                            stable_ticks += 1;
+                            if stable_ticks >= 2 {
+                                println!(
+                                    "[ble] {id}: GATT table ready after slow discovery ({} service(s), {} char(s), {} desc(s))",
+                                    counts.0, counts.1, counts.2
+                                );
+                                return Ok(());
+                            }
+                        } else {
+                            stable_counts = Some(counts);
+                            stable_ticks = 0;
+                        }
+                    } else {
+                        last_err = Some("no GATT services discovered".into());
+                    }
+                }
+                Ok(Err(e)) => {
+                    let msg = e.to_string();
+                    let lower = msg.to_lowercase();
+                    let retryable = lower.contains("timed out")
+                        || lower.contains("timeout")
+                        || lower.contains("inprogress")
+                        || lower.contains("in progress")
+                        || lower.contains("not ready")
+                        || lower.contains("busy");
+                    last_err = Some(msg);
+                    if !retryable {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    last_err = Some("service discovery timed out".into());
+                }
+            }
+        }
+        if services_ready(p) && p.is_connected().await.unwrap_or(false) {
+            if slow_discovery {
+                let counts = gatt_counts(p);
+                println!(
+                    "[ble] {id}: GATT table ready at deadline ({} service(s), {} char(s), {} desc(s))",
+                    counts.0, counts.1, counts.2
+                );
+            }
+            return Ok(());
+        }
+        if p.is_connected().await.unwrap_or(false) {
+            let _ = timeout(Duration::from_secs(3), p.disconnect()).await;
+        }
+        self.disconnected_at
+            .lock()
+            .await
+            .insert(id.to_string(), std::time::Instant::now());
+        sleep(Duration::from_millis(350)).await;
+        Err(last_err.unwrap_or_else(|| "no GATT services discovered".into()))
+    }
+
     fn spawn_event_loop(self: &Arc<Self>) {
         let me = self.clone();
         spawn_task(async move {
@@ -422,10 +738,22 @@ impl Broker {
                 while let Some(ev) = events.next().await {
                     if let CentralEvent::DeviceDisconnected(id) = ev {
                         let id = id.to_string();
+                        if trace_level() > 0 {
+                            println!("[ble] OS disconnected {id}");
+                        }
                         me.subs.lock().await.retain(|(d, _)| *d != id);
+                        me.peripherals.lock().await.remove(&id);
                         if let Some(t) = me.notify_tasks.lock().await.remove(&id) {
                             t.abort();
                         }
+                        let now = std::time::Instant::now();
+                        me.disconnected_at.lock().await.insert(id.clone(), now);
+                        *me.scan_holdoff_until.lock().await = None;
+                        // Brief settle window before the supervisor retries a freshly dropped link.
+                        me.retry_after
+                            .lock()
+                            .await
+                            .insert(id.clone(), now + Duration::from_secs(2));
                         // Use js() which on Linux (app is None) writes a js_eval event to stdout.
                         // main.js handles js_eval by executing JS directly in the webview.
                         js(me.app.as_ref(), "disconnected", vec![json!(id)]);
@@ -438,28 +766,43 @@ impl Broker {
     async fn spawn_supervisor(self: &Arc<Self>) {
         let me = self.clone();
         let handle = spawn_task(async move {
-            let mut scanning = false;
+            let started_at = std::time::Instant::now();
+            let mut last_any_connected = false;
+            // Kick off LE discovery immediately at app launch so remembered trainers are
+            // seen and pre-connected in the background BEFORE the user clicks Start/Resume.
+            if !me.known.lock().await.is_empty() && me.start_scan_if_idle().await {
+                println!("[terra] scanning for remembered devices (started: true)");
+            }
             loop {
-                sleep(Duration::from_secs(3)).await;
+                let fast_boot = !last_any_connected && started_at.elapsed() < Duration::from_secs(8);
+                sleep(if fast_boot { Duration::from_millis(300) } else { Duration::from_secs(3) }).await;
                 if me.shutting_down.load(Ordering::SeqCst) {
-                    if scanning {
-                        let _ = me.adapter.stop_scan().await;
-                    }
+                    me.pause_scan_for_connect().await;
                     break;
                 }
                 if me.pending.lock().await.is_some() {
-                    scanning = false;
                     continue;
                 }
                 let known = me.known.lock().await.clone();
                 let mut missing = false;
+                let mut any_connected = false;
+                let mut to_connect: Vec<(String, Peripheral)> = Vec::new();
                 if !known.is_empty() {
                     // A remembered device an enabled addon keeps off the air (its
                     // `btExcludeNames` setting) is not pre-connected: e.g. a Kickr
                     // driven over Wi-Fi must not also be auto-connected over
                     // Bluetooth.
                     let excluded = me.app.as_ref().map(crate::addons::bt_exclude_names).unwrap_or_default();
-                    let list = me.adapter.peripherals().await.unwrap_or_default();
+                    // Prefer our cached Peripheral instances from `me.peripherals` because btleplug's
+                    // `adapter.peripherals()` returns fresh structs whose local `services()` cache is
+                    // empty until `discover_services()` is called on that specific instance.
+                    let mut by_id: HashMap<String, Peripheral> = me.peripherals.lock().await.clone();
+                    if let Ok(list) = me.adapter.peripherals().await {
+                        for p in list {
+                            by_id.entry(p.id().to_string()).or_insert(p);
+                        }
+                    }
+                    let now = std::time::Instant::now();
                     for k in &known {
                         if me.shutting_down.load(Ordering::SeqCst) {
                             break;
@@ -467,61 +810,157 @@ impl Broker {
                         if k.name.as_deref().map_or(false, |n| excluded.contains(n)) {
                             continue;
                         }
-                        let Some(p) = list.iter().find(|p| p.id().to_string() == k.id) else {
+                        let Some(p) = by_id.get(&k.id) else {
                             missing = true;
                             continue;
                         };
                         if p.is_connected().await.unwrap_or(false) {
-                            if me.peripherals.lock().await.insert(k.id.clone(), p.clone()).is_none() {
-                                println!("[terra] {} already connected at BLE level", k.id);
+                            if services_ready(p) {
+                                any_connected = true;
+                                me.retry_after.lock().await.remove(&k.id);
+                                if me.peripherals.lock().await.insert(k.id.clone(), p.clone()).is_none() {
+                                    println!("[terra] {} already connected at BLE level", k.id);
+                                    js(me.app.as_ref(), "autoConnected", vec![json!(k.id)]);
+                                }
+                            } else {
+                                // OS-level connected without resolved GATT services yet (e.g.
+                                // pre-existing BlueZ link at startup): resolve services via the
+                                // serialized connect path instead of advertising a 0-service link.
+                                let cooling_down = me
+                                    .retry_after
+                                    .lock()
+                                    .await
+                                    .get(&k.id)
+                                    .map_or(false, |t| now < *t);
+                                if !cooling_down && !me.connecting.lock().await.contains(&k.id) {
+                                    to_connect.push((k.id.clone(), p.clone()));
+                                }
                             }
                             continue;
                         }
+                        // Recover from missed BlueZ disconnect events: if we still hold a
+                        // notify task or active subscription for a peripheral BlueZ now
+                        // reports as disconnected, clean up and tell the webview.
+                        let stale_task = me.notify_tasks.lock().await.remove(&k.id);
+                        let stale_subs = {
+                            let mut subs = me.subs.lock().await;
+                            let before = subs.len();
+                            subs.retain(|(d, _)| d != &k.id);
+                            subs.len() != before
+                        };
+                        let had_stale = stale_task.is_some() || stale_subs;
+                        if let Some(t) = stale_task {
+                            t.abort();
+                        }
+                        if had_stale {
+                            println!("[terra] {} detected disconnected by supervisor", k.id);
+                            me.peripherals.lock().await.remove(&k.id);
+                            me.disconnected_at.lock().await.insert(k.id.clone(), now);
+                            js(me.app.as_ref(), "disconnected", vec![json!(k.id)]);
+                        }
                         missing = true;
+                        let cooling_down = me
+                            .retry_after
+                            .lock()
+                            .await
+                            .get(&k.id)
+                            .map_or(false, |t| now < *t);
+                        if cooling_down {
+                            continue;
+                        }
                         let visible = matches!(p.properties().await, Ok(Some(ref pr)) if pr.rssi.is_some());
-                        if visible
-                            && !me.shutting_down.load(Ordering::SeqCst)
-                            && me.connecting.lock().await.insert(k.id.clone())
-                        {
-                            let (me2, p2, id) = (me.clone(), p.clone(), k.id.clone());
-                            spawn_task(async move {
-                                let r = timeout(Duration::from_secs(20), async {
-                                    p2.connect().await?;
-                                    if me2.shutting_down.load(Ordering::SeqCst) {
-                                        return Ok(());
-                                    }
-                                    p2.discover_services().await
-                                })
-                                .await;
-                                if me2.shutting_down.load(Ordering::SeqCst) {
-                                    let _ = timeout(Duration::from_secs(3), p2.disconnect()).await;
-                                    me2.connecting.lock().await.remove(&id);
-                                    return;
-                                }
-                                match r {
-                                    Ok(Ok(())) => {
-                                        println!("[terra] auto-connected {id}");
-                                        me2.peripherals.lock().await.insert(id.clone(), p2);
-                                    }
-                                    other => eprintln!("[terra] auto-connect {id} failed: {other:?}"),
-                                }
-                                me2.connecting.lock().await.remove(&id);
-                            });
+                        if visible {
+                            to_connect.push((k.id.clone(), p.clone()));
                         }
                     }
                 }
-                if me.shutting_down.load(Ordering::SeqCst) {
-                    if scanning {
-                        let _ = me.adapter.stop_scan().await;
+
+                // Connect visible remembered devices sequentially with LE discovery paused.
+                // On Linux BlueZ, calling Device1.Connect() while StartDiscovery is active
+                // frequently stalls until timeout and triggers org.bluez.Error.InProgress.
+                if !to_connect.is_empty() && !me.shutting_down.load(Ordering::SeqCst) {
+                    let _gate = me.connect_gate.lock().await;
+                    if !me.shutting_down.load(Ordering::SeqCst) && me.pending.lock().await.is_none() {
+                        me.pause_scan_for_connect().await;
+                        for (id, p2) in to_connect {
+                            if me.shutting_down.load(Ordering::SeqCst) || me.pending.lock().await.is_some() {
+                                break;
+                            }
+                            let p2 = me.peripherals.lock().await.get(&id).cloned().unwrap_or(p2);
+                            if p2.is_connected().await.unwrap_or(false) && services_ready(&p2) {
+                                any_connected = true;
+                                me.retry_after.lock().await.remove(&id);
+                                if me.peripherals.lock().await.insert(id.clone(), p2).is_none() {
+                                    js(me.app.as_ref(), "autoConnected", vec![json!(id)]);
+                                }
+                                continue;
+                            }
+                            me.connecting.lock().await.insert(id.clone());
+                            let t0 = std::time::Instant::now();
+                            let r = me.connect_and_discover(&id, &p2).await;
+                            me.connecting.lock().await.remove(&id);
+                            if me.shutting_down.load(Ordering::SeqCst) {
+                                let _ = timeout(Duration::from_secs(3), p2.disconnect()).await;
+                                break;
+                            }
+                            match r {
+                                Ok(()) => {
+                                    println!(
+                                        "[terra] auto-connected {id} ({} service(s), {} ms)",
+                                        p2.services().len(),
+                                        t0.elapsed().as_millis()
+                                    );
+                                    any_connected = true;
+                                    me.retry_after.lock().await.remove(&id);
+                                    me.peripherals.lock().await.insert(id.clone(), p2);
+                                    let now = std::time::Instant::now();
+                                    *me.scan_holdoff_until.lock().await = Some(now + Duration::from_secs(4));
+                                    js(me.app.as_ref(), "autoConnected", vec![json!(id)]);
+                                }
+                                Err(msg) => {
+                                    let backoff = if msg.to_lowercase().contains("timed out") || msg.contains("InProgress") {
+                                        Duration::from_secs(15)
+                                    } else {
+                                        Duration::from_secs(8)
+                                    };
+                                    eprintln!("[terra] auto-connect {id} failed (retry in {}s): {msg}", backoff.as_secs());
+                                    me.retry_after.lock().await.insert(id, std::time::Instant::now() + backoff);
+                                }
+                            }
+                        }
                     }
+                }
+
+                last_any_connected = any_connected;
+                if me.shutting_down.load(Ordering::SeqCst) {
+                    me.pause_scan_for_connect().await;
                     break;
                 }
-                if missing && !scanning {
-                    scanning = me.adapter.start_scan(ScanFilter::default()).await.is_ok();
-                    println!("[terra] scanning for remembered devices (started: {scanning})");
-                } else if !missing && scanning {
-                    let _ = me.adapter.stop_scan().await;
-                    scanning = false;
+                if me.pending.lock().await.is_some() || !me.connecting.lock().await.is_empty() {
+                    continue;
+                }
+                if me.scan_holdoff_until.lock().await.map_or(false, |t| std::time::Instant::now() < t) {
+                    continue;
+                }
+
+                // Scan with LE-only discovery (`Transport::Le`) whenever:
+                //   1) Biketerra explicitly requested a scan (`native_scanning`), OR
+                //   2) Any remembered (non-excluded) device is still missing (e.g. Zwift Ride
+                //      controllers woken up after the trainer already connected).
+                // Discovery is always paused during `connect_gate` connects + the 4 s settle
+                // window, and stops completely once all remembered devices are connected.
+                let is_scanning = me.scanning.load(Ordering::SeqCst);
+                let want_native_scan = me.native_scanning.load(Ordering::SeqCst);
+                let want_scan = want_native_scan || missing;
+                if !want_scan {
+                    if is_scanning {
+                        me.adapter_stop_le_scan().await;
+                        me.scanning.store(false, Ordering::SeqCst);
+                    }
+                } else if !is_scanning {
+                    if me.start_scan_if_idle().await {
+                        println!("[terra] scanning for remembered devices (started: true)");
+                    }
                 }
             }
         });
@@ -572,8 +1011,11 @@ impl Broker {
     /// 30 s RPC timeout, leaving every not-yet-reached device connected at
     /// the OS level. A second pass re-checks and disconnects anything still
     /// up: BlueZ happily keeps bonded devices (e.g. an HR strap) connected
-    /// at the OS level and re-parks a GATT link the moment a client drops it.
-    /// Worst case for 3 devices: 3×4 s + 0.5 s + 3×3 s ≈ 21.5 s < 30 s budget.
+    /// Disconnects every active BLE link on app shutdown.
+    /// Runs disconnects concurrently across all devices so 4+ peripherals
+    /// tear down in ~1 s instead of serially exhausting the shutdown timeout,
+    /// then does one quick parallel re-check pass for bonded devices that BlueZ
+    /// may briefly hold open.
     pub async fn disconnect_all(&self) -> Result<(), String> {
         // Stop auto-reconnect & scanning immediately so the supervisor cannot
         // fire a new `connect()` while we tear down existing links.
@@ -581,7 +1023,9 @@ impl Broker {
         if let Some(t) = self.supervisor_task.lock().await.take() {
             t.abort();
         }
-        let _ = timeout(Duration::from_secs(2), self.adapter.stop_scan()).await;
+        if self.scanning.swap(false, Ordering::SeqCst) {
+            self.adapter_stop_le_scan().await;
+        }
 
         let mut nt = self.notify_tasks.lock().await;
         for (id, t) in nt.drain() {
@@ -605,16 +1049,22 @@ impl Broker {
             }
         }
 
-        for (id, p) in &targets {
-            if !p.is_connected().await.unwrap_or(false) {
-                continue;
+        // Pass 1: disconnect all connected peripherals in parallel.
+        let pass1 = targets.iter().map(|(id, p)| {
+            let id = id.clone();
+            let p = p.clone();
+            async move {
+                if !p.is_connected().await.unwrap_or(false) {
+                    return;
+                }
+                match timeout(Duration::from_secs(4), p.disconnect()).await {
+                    Ok(Ok(())) => println!("[ble] shutdown: disconnected {id}"),
+                    Ok(Err(e)) => eprintln!("[ble] shutdown: disconnect {id} failed: {e}"),
+                    Err(_) => eprintln!("[ble] shutdown: disconnect {id} timed out"),
+                }
             }
-            match timeout(Duration::from_secs(4), p.disconnect()).await {
-                Ok(Ok(())) => println!("[ble] shutdown: disconnected {id}"),
-                Ok(Err(e)) => eprintln!("[ble] shutdown: disconnect {id} failed: {e}"),
-                Err(_) => eprintln!("[ble] shutdown: disconnect {id} timed out"),
-            }
-        }
+        });
+        futures::future::join_all(pass1).await;
 
         // Wait briefly for any in-flight `p2.connect()` to settle (it checks
         // `shutting_down` and self-disconnects) before the second pass.
@@ -625,8 +1075,8 @@ impl Broker {
             sleep(Duration::from_millis(100)).await;
         }
 
-        // Let BlueZ settle, then re-check: anything still up gets one more pass.
-        sleep(Duration::from_millis(500)).await;
+        // Let BlueZ settle, then re-check in parallel: anything still up gets one more pass.
+        sleep(Duration::from_millis(350)).await;
         let mut recheck = targets;
         if let Ok(list) = self.adapter.peripherals().await {
             for p in list {
@@ -636,16 +1086,21 @@ impl Broker {
                 }
             }
         }
-        for (id, p) in &recheck {
-            if !p.is_connected().await.unwrap_or(false) {
-                continue;
+        let pass2 = recheck.iter().map(|(id, p)| {
+            let id = id.clone();
+            let p = p.clone();
+            async move {
+                if !p.is_connected().await.unwrap_or(false) {
+                    return;
+                }
+                match timeout(Duration::from_secs(3), p.disconnect()).await {
+                    Ok(Ok(())) => println!("[ble] shutdown: disconnected (2nd pass) {id}"),
+                    Ok(Err(e)) => eprintln!("[ble] shutdown: 2nd pass {id} failed: {e}"),
+                    Err(_) => eprintln!("[ble] shutdown: 2nd pass {id} timed out"),
+                }
             }
-            match timeout(Duration::from_secs(3), p.disconnect()).await {
-                Ok(Ok(())) => println!("[ble] shutdown: disconnected (2nd pass) {id}"),
-                Ok(Err(e)) => eprintln!("[ble] shutdown: 2nd pass {id} failed: {e}"),
-                Err(_) => eprintln!("[ble] shutdown: 2nd pass {id} timed out"),
-            }
-        }
+        });
+        futures::future::join_all(pass2).await;
         self.peripherals.lock().await.clear();
         Ok(())
     }
@@ -701,6 +1156,7 @@ impl Broker {
 
     pub async fn devices_status(&self) -> Vec<BleDeviceStatus> {
         let known = self.known.lock().await.clone();
+        let connecting = self.connecting.lock().await.clone();
         let mut by_id: HashMap<String, Peripheral> = self.peripherals.lock().await.clone();
         if let Ok(list) = self.adapter.peripherals().await {
             for p in list {
@@ -711,29 +1167,36 @@ impl Broker {
         let mut out = Vec::new();
         for k in &known {
             seen.insert(k.id.clone());
-            let connected = match by_id.get(&k.id) {
-                Some(p) => p.is_connected().await.unwrap_or(false),
-                None => false,
+            let is_connecting = connecting.contains(&k.id);
+            let connected = if is_connecting {
+                false
+            } else {
+                match by_id.get(&k.id) {
+                    Some(p) => p.is_connected().await.unwrap_or(false) && services_ready(p),
+                    None => false,
+                }
             };
             out.push(BleDeviceStatus {
                 id: k.id.clone(),
                 name: k.name.clone(),
                 owner: k.owner.clone(),
                 connected,
+                connecting: is_connecting,
                 remembered: true,
             });
         }
         for (id, p) in by_id {
-            if seen.contains(&id) {
+            if seen.contains(&id) || connecting.contains(&id) {
                 continue;
             }
-            if p.is_connected().await.unwrap_or(false) {
+            if p.is_connected().await.unwrap_or(false) && services_ready(&p) {
                 let name = p.properties().await.ok().flatten().and_then(|pr| pr.local_name);
                 out.push(BleDeviceStatus {
                     id,
                     name,
                     owner: None,
                     connected: true,
+                    connecting: false,
                     remembered: false,
                 });
             }
@@ -741,29 +1204,192 @@ impl Broker {
         out
     }
 
-    async fn remembered_match(&self, filters: &[Filter], excl: &[Filter], all: bool) -> Option<DeviceInfo> {
+    pub async fn set_native_scan(&self, on: bool) -> Result<(), String> {
+        self.native_scanning.store(on, Ordering::SeqCst);
+        if on {
+            if self.peripherals.lock().await.is_empty() {
+                *self.scan_holdoff_until.lock().await = None;
+            }
+            // Do not call start_scan while BlueZ holds `connect_gate` (connecting/discovering) —
+            // concurrent StartDiscovery triggers Service discovery timed out. The supervisor will
+            // resume scanning automatically once `connect_gate` is free.
+            let _ = self.start_scan_if_idle().await;
+        } else if self.scanning.load(Ordering::SeqCst) && self.pending.lock().await.is_none() {
+            let known = self.known.lock().await.clone();
+            let excluded = self.app.as_ref().map(crate::addons::bt_exclude_names).unwrap_or_default();
+            let map = self.peripherals.lock().await.clone();
+            let mut any_missing = false;
+            for k in &known {
+                if k.name.as_deref().map_or(false, |n| excluded.contains(n)) {
+                    continue;
+                }
+                let conn = match map.get(&k.id) {
+                    Some(p) => p.is_connected().await.unwrap_or(false) && services_ready(p),
+                    None => false,
+                };
+                if !conn {
+                    any_missing = true;
+                    break;
+                }
+            }
+            if !any_missing {
+                self.adapter_stop_le_scan().await;
+                self.scanning.store(false, Ordering::SeqCst);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn remember_device(&self, id: String, name: Option<String>) -> Result<(), String> {
+        let resolved_name = match name {
+            Some(n) if !n.is_empty() => Some(n),
+            _ => match self.get(&id).await {
+                Ok(p) => p.properties().await.ok().flatten().and_then(|pr| pr.local_name),
+                Err(_) => None,
+            },
+        };
+        self.remember(&DeviceInfo { id, name: resolved_name }, None).await;
+        Ok(())
+    }
+
+    #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
+    pub async fn remembered_page_ids(&self) -> Vec<String> {
+        self.known
+            .lock()
+            .await
+            .iter()
+            .filter(|k| k.owner.is_none())
+            .map(|k| k.id.clone())
+            .collect()
+    }
+
+    /// Returns nearby/connected non-addon peripherals matching Biketerra's native scan UUIDs
+    /// (plus remembered non-addon devices in range even if they omit service UUIDs in ads).
+    pub async fn scan_candidates(&self, filter_uuids: Vec<String>) -> Vec<BleDeviceStatus> {
+        let known = self.known.lock().await.clone();
+        let connecting = self.connecting.lock().await.clone();
+        let released = self.released.lock().await.clone();
+        let excluded_names = self.app.as_ref().map(crate::addons::bt_exclude_names).unwrap_or_default();
+        let filters: Vec<Filter> = filter_uuids
+            .into_iter()
+            .map(|u| Filter { services: Some(vec![u]), name: None, name_prefix: None })
+            .collect();
+        let mut by_id: HashMap<String, Peripheral> = self.peripherals.lock().await.clone();
+        if let Ok(list) = self.adapter.peripherals().await {
+            for p in list {
+                by_id.entry(p.id().to_string()).or_insert(p);
+            }
+        }
+        let mut out: Vec<(u8, Option<i16>, BleDeviceStatus)> = Vec::new();
+        for p in by_id.into_values() {
+            let Ok(Some(props)) = p.properties().await else { continue };
+            let id = p.id().to_string();
+            let connected = p.is_connected().await.unwrap_or(false);
+            let is_connecting = connecting.contains(&id);
+            if props.rssi.is_none() && !connected && !is_connecting {
+                continue;
+            }
+            let known_entry = known.iter().find(|k| k.id == id);
+            if let Some(k) = known_entry {
+                if k.owner.as_ref().map_or(false, |o| !released.contains(o)) {
+                    continue;
+                }
+                if k.name.as_deref().map_or(false, |n| excluded_names.contains(n)) {
+                    continue;
+                }
+            }
+            let mut d_props = props_from_peripheral(&p, &props);
+            if d_props.name.is_none() {
+                d_props.name = known_entry.and_then(|k| k.name.clone());
+            }
+            if d_props.name.as_deref().map_or(false, |n| excluded_names.contains(n)) {
+                continue;
+            }
+            for svc in p.services() {
+                if !d_props.services.contains(&svc.uuid) {
+                    d_props.services.push(svc.uuid);
+                }
+            }
+            let remembered = known_entry.is_some();
+            if !remembered && !filters.is_empty() && !chooser_matches(&d_props, &filters, &[], false) {
+                continue;
+            }
+            let r = rank(&d_props);
+            out.push((
+                r,
+                props.rssi,
+                BleDeviceStatus {
+                    id,
+                    name: d_props.name,
+                    owner: known_entry.and_then(|k| k.owner.clone()),
+                    connected,
+                    connecting: is_connecting,
+                    remembered,
+                },
+            ));
+        }
+        out.sort_by(|a, b| {
+            b.2.connected
+                .cmp(&a.2.connected)
+                .then(b.2.remembered.cmp(&a.2.remembered))
+                .then(a.0.cmp(&b.0))
+                .then(b.1.cmp(&a.1))
+        });
+        out.into_iter().map(|(_, _, s)| s).collect()
+    }
+
+    async fn remembered_match(
+        &self,
+        filters: &[Filter],
+        excl: &[Filter],
+        all: bool,
+        exclude_ids: &[String],
+    ) -> Option<DeviceInfo> {
         let known = self.known.lock().await.clone();
         if known.is_empty() {
             return None;
         }
         let released = self.released.lock().await.clone();
+        let excluded_names = self.app.as_ref().map(crate::addons::bt_exclude_names).unwrap_or_default();
         let mut best: Option<(u8, Peripheral, Option<String>)> = None;
         for p in self.adapter.peripherals().await.ok()? {
             let id = p.id().to_string();
-            if !known.iter().any(|k| k.id == id && k.owner.as_ref().map_or(true, |o| released.contains(o))) {
+            if exclude_ids.iter().any(|x| x == &id) {
+                continue;
+            }
+            let Some(k) = known
+                .iter()
+                .find(|k| k.id == id && k.owner.as_ref().map_or(true, |o| released.contains(o)))
+            else {
+                continue;
+            };
+            if k.name.as_deref().map_or(false, |n| excluded_names.contains(n)) {
                 continue;
             }
             let Ok(Some(props)) = p.properties().await else { continue };
             if !in_range(&p, &props).await {
                 continue;
             }
-            let d_props = props_from_peripheral(&p, &props);
+            let mut d_props = props_from_peripheral(&p, &props);
+            if d_props.name.is_none() {
+                d_props.name = k.name.clone();
+            }
+            if d_props.name.as_deref().map_or(false, |n| excluded_names.contains(n)) {
+                continue;
+            }
+            // Merge discovered GATT service UUIDs for already-connected peripherals so
+            // ranking and filter matching stay accurate even when BlueZ omits them in props.
+            for svc in p.services() {
+                if !d_props.services.contains(&svc.uuid) {
+                    d_props.services.push(svc.uuid);
+                }
+            }
             if !wanted(&d_props, filters, excl, all) {
                 continue;
             }
             let r = rank(&d_props);
             if best.as_ref().map_or(true, |b| r < b.0) {
-                best = Some((r, p, props.local_name.clone()));
+                best = Some((r, p, d_props.name.clone()));
             }
         }
         let (_, p, name) = best?;
@@ -779,9 +1405,10 @@ impl Broker {
         accept_all: bool,
         silent: bool,
         owner: Option<String>,
+        exclude_ids: Vec<String>,
     ) -> Result<DeviceInfo, String> {
         if owner.is_none() && silent {
-            if let Some(info) = self.remembered_match(&filters, &exclusions, accept_all).await {
+            if let Some(info) = self.remembered_match(&filters, &exclusions, accept_all, &exclude_ids).await {
                 println!("[terra] remembered match: {:?}", info.name);
                 return Ok(info);
             }
@@ -799,7 +1426,8 @@ impl Broker {
             }
             *pend = Some(Pending { filters, exclusions, accept_all, owner: owner.clone(), tx: Some(tx) });
         }
-        let _ = self.adapter.start_scan(ScanFilter::default()).await;
+        let scan_ok = self.adapter_start_le_scan().await;
+        self.scanning.store(scan_ok, Ordering::SeqCst);
         if let Err(e) = self.open_chooser() {
             self.pending.lock().await.take();
             return Err(format!("NotFound: could not open chooser: {e}"));
@@ -808,7 +1436,8 @@ impl Broker {
         let res = timeout(Duration::from_secs(120), rx).await;
 
         self.pending.lock().await.take();
-        let _ = self.adapter.stop_scan().await;
+        self.adapter_stop_le_scan().await;
+        self.scanning.store(false, Ordering::SeqCst);
         if let Some(ref app) = self.app {
             if let Some(w) = app.get_webview_window("chooser") {
                 let _ = w.close();
@@ -905,14 +1534,117 @@ impl Broker {
     }
 
     pub async fn connect(&self, id: &str) -> Result<Vec<ServiceInfo>, String> {
+        self.connect_with_wait(id, false).await
+    }
+
+    pub async fn connect_with_wait(&self, id: &str, wait_visible: bool) -> Result<Vec<ServiceInfo>, String> {
+        let t_call = std::time::Instant::now();
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err("BLE broker is shutting down".into());
         }
-        let p = self.get(id).await?;
-        if !p.is_connected().await.unwrap_or(false) {
-            p.connect().await.map_err(err)?;
+        let mut p = self.get(id).await?;
+        let mut already_ready = p.is_connected().await.unwrap_or(false) && services_ready(&p);
+        if !already_ready {
+            let started = std::time::Instant::now();
+            let max_attempts = if wait_visible { 2 } else { 1 };
+            for attempt in 0..max_attempts {
+                if self.shutting_down.load(Ordering::SeqCst) {
+                    return Err("BLE broker is shutting down".into());
+                }
+                if attempt > 0 {
+                    p = self.get(id).await?;
+                }
+                let is_conn = p.is_connected().await.unwrap_or(false);
+                if is_conn && services_ready(&p) {
+                    already_ready = true;
+                    break;
+                }
+                if !is_conn {
+                    // If this device just dropped out on BlueZ, let the link teardown settle briefly
+                    // before dialing again (calling Device1.Connect() at t=5ms after DeviceDisconnected
+                    // frequently triggers ServiceDiscoveryTimedOut on Linux BlueZ).
+                    if wait_visible {
+                        let settle = self
+                            .disconnected_at
+                            .lock()
+                            .await
+                            .get(id)
+                            .and_then(|t| Duration::from_millis(1200).checked_sub(t.elapsed()));
+                        if let Some(wait) = settle {
+                            sleep(wait).await;
+                        }
+                    }
+                    let mut visible = matches!(p.properties().await, Ok(Some(ref pr)) if pr.rssi.is_some());
+                    if !visible && wait_visible {
+                        // Explicit native connect / post-dropout reconnect: scan briefly (without
+                        // holding `connect_gate`) for the peripheral to start advertising again.
+                        let _ = self.start_scan_if_idle().await;
+                        let wait_secs = if attempt == 0 { 10 } else { 5 };
+                        let deadline = std::time::Instant::now() + Duration::from_secs(wait_secs);
+                        while std::time::Instant::now() < deadline {
+                            if self.shutting_down.load(Ordering::SeqCst) {
+                                return Err("BLE broker is shutting down".into());
+                            }
+                            if p.is_connected().await.unwrap_or(false) {
+                                visible = true;
+                                break;
+                            }
+                            if matches!(p.properties().await, Ok(Some(ref pr)) if pr.rssi.is_some()) {
+                                visible = true;
+                                break;
+                            }
+                            let _ = self.start_scan_if_idle().await;
+                            sleep(Duration::from_millis(250)).await;
+                        }
+                    }
+                    if !visible {
+                        // Do not pause LE discovery or block `connect_gate` for a powered-off/out-of-range
+                        // peripheral (e.g. sleeping Zwift Ride controllers polled by addons).
+                        return Err(format!("device {id} is not in range"));
+                    }
+                }
+                let _gate = self.connect_gate.lock().await;
+                if self.shutting_down.load(Ordering::SeqCst) {
+                    return Err("BLE broker is shutting down".into());
+                }
+                // Pick up a Peripheral instance already resolved by the supervisor while we waited.
+                if let Some(cached) = self.peripherals.lock().await.get(id).cloned() {
+                    p = cached;
+                }
+                if p.is_connected().await.unwrap_or(false) && services_ready(&p) {
+                    already_ready = true;
+                    self.retry_after.lock().await.remove(id);
+                    self.disconnected_at.lock().await.remove(id);
+                    break;
+                }
+                self.connecting.lock().await.insert(id.to_string());
+                let res = self.connect_and_discover(id, &p).await;
+                self.connecting.lock().await.remove(id);
+                match res {
+                    Ok(()) => {
+                        self.peripherals.lock().await.insert(id.to_string(), p.clone());
+                        self.retry_after.lock().await.remove(id);
+                        self.disconnected_at.lock().await.remove(id);
+                        break;
+                    }
+                    Err(e) => {
+                        if wait_visible {
+                            eprintln!("[ble] connect {id} failed (attempt {}): {e}", attempt + 1);
+                        }
+                        if attempt + 1 < max_attempts
+                            && started.elapsed() < Duration::from_secs(12)
+                            && !self.shutting_down.load(Ordering::SeqCst)
+                        {
+                            continue;
+                        }
+                        return Err(e);
+                    }
+                }
+            }
         }
-        p.discover_services().await.map_err(err)?;
+        // Give JS + Biketerra a 4 s quiet window to finish subscribing and sending
+        // FTMS RequestControl / SimParams before background LE discovery resumes.
+        *self.scan_holdoff_until.lock().await = Some(std::time::Instant::now() + Duration::from_secs(4));
 
         let mut stream = p.notifications().await.map_err(err)?;
         let (app, did) = (self.app.clone(), id.to_string());
@@ -929,7 +1661,8 @@ impl Broker {
             old.abort();
         }
 
-        Ok(p.services()
+        let svcs: Vec<ServiceInfo> = p
+            .services()
             .into_iter()
             .map(|s| ServiceInfo {
                 uuid: s.uuid.to_string(),
@@ -946,7 +1679,18 @@ impl Broker {
                     })
                     .collect(),
             })
-            .collect())
+            .collect();
+        if svcs.is_empty() {
+            return Err("no GATT services discovered".into());
+        }
+        if trace_level() > 0 {
+            println!(
+                "[ble] connect {id} -> {} service(s) (ready={already_ready}, {} ms)",
+                svcs.len(),
+                t_call.elapsed().as_millis()
+            );
+        }
+        Ok(svcs)
     }
 
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
@@ -964,7 +1708,11 @@ impl Broker {
             .collect();
         self.subs.lock().await.retain(|(d, _)| d != id);
 
-        if self.known.lock().await.iter().any(|k| k.id == id) {
+        let is_known = self.known.lock().await.iter().any(|k| k.id == id);
+        if trace_level() > 0 {
+            println!("[ble] disconnect {id} (unsub={}, keep_os={is_known})", subscribed.len());
+        }
+        if is_known {
             for c in subscribed {
                 if let Some(ch) = p.characteristics().into_iter().find(|x| x.uuid.to_string() == c) {
                     let _ = p.unsubscribe(&ch).await;
@@ -1022,17 +1770,31 @@ impl Broker {
     pub async fn subscribe(&self, id: &str, s: &str, c: &str, on: bool) -> Result<(), String> {
         let (p, ch) = self.characteristic(id, s, c).await?;
         let key = (id.to_string(), ch.uuid.to_string());
+        if on && !p.is_connected().await.unwrap_or(false) {
+            self.subs.lock().await.retain(|(d, _)| d != id);
+            if let Some(t) = self.notify_tasks.lock().await.remove(id) {
+                t.abort();
+            }
+            js(self.app.as_ref(), "disconnected", vec![json!(id)]);
+            return Err(format!("device {id} is disconnected"));
+        }
+        let has_notify_task = self.notify_tasks.lock().await.contains_key(id);
         let mut subs = self.subs.lock().await;
         if on {
-            if subs.contains(&key) {
+            if subs.contains(&key) && has_notify_task {
                 if trace_level() > 0 {
                     println!("[ble] subscribe {id} {} (already subscribed, skipped)", su(&ch.uuid));
                 }
                 return Ok(());
             }
-            p.subscribe(&ch).await.map_err(err)?;
+            let t0 = std::time::Instant::now();
+            match p.subscribe(&ch).await {
+                Ok(()) => {}
+                Err(e) if e.to_string().to_lowercase().contains("already notifying") => {}
+                Err(e) => return Err(err(e)),
+            }
             if trace_level() > 0 {
-                println!("[ble] subscribe {id} {} ok", su(&ch.uuid));
+                println!("[ble] subscribe {id} {} ok ({} ms)", su(&ch.uuid), t0.elapsed().as_millis());
             }
             subs.insert(key);
         } else {
@@ -1481,6 +2243,8 @@ pub struct Broker {
     connecting: Mutex<HashSet<String>>,
     pending: Mutex<Option<Pending>>,
     released: Mutex<HashSet<String>>,
+    native_scanning: AtomicBool,
+    connect_gate: Mutex<()>,
     store: PathBuf,
 }
 
@@ -1504,10 +2268,22 @@ impl Broker {
             connecting: Mutex::new(HashSet::new()),
             pending: Mutex::new(None),
             released: Mutex::new(HashSet::new()),
+            native_scanning: AtomicBool::new(false),
+            connect_gate: Mutex::new(()),
             store,
         });
         b.spawn_supervisor();
         Ok(b)
+    }
+
+    pub async fn remembered_page_ids(&self) -> Vec<String> {
+        self.known
+            .lock()
+            .await
+            .iter()
+            .filter(|k| k.owner.is_none())
+            .map(|k| k.id.clone())
+            .collect()
     }
 
     fn spawn_supervisor(self: &Arc<Self>) {
@@ -1539,12 +2315,15 @@ impl Broker {
                         if visible && me.connecting.lock().await.insert(k.id.clone()) {
                             let (me2, id) = (me.clone(), k.id.clone());
                             tauri::async_runtime::spawn(async move {
-                                let r = timeout(Duration::from_secs(20), async {
-                                    me2.connect(&id).await
+                                let r = timeout(Duration::from_secs(30), async {
+                                    me2.connect_gated(&id).await
                                 })
                                 .await;
                                 match r {
-                                    Ok(Ok(_)) => println!("[terra] auto-connected {id}"),
+                                    Ok(Ok(_)) => {
+                                        println!("[terra] auto-connected {id}");
+                                        js(&me2.app, "autoConnected", vec![json!(id)]);
+                                    }
                                     other => eprintln!("[terra] auto-connect {id} failed: {other:?}"),
                                 }
                                 me2.connecting.lock().await.remove(&id);
@@ -1552,11 +2331,17 @@ impl Broker {
                         }
                     }
                 }
-                if missing && !scanning {
-                    let res = call_ble_manager("startScan", "()Z", &[]);
-                    scanning = res.ok().as_deref() == Some("true");
-                    println!("[terra] scanning for remembered devices (started: {scanning})");
-                } else if !missing && scanning {
+                let want_scan = missing || me.native_scanning.load(Ordering::SeqCst);
+                if want_scan {
+                    if me.connect_gate.try_lock().is_ok() {
+                        let res = call_ble_manager("startScan", "()Z", &[]);
+                        let started = res.ok().as_deref() == Some("true");
+                        if started && !scanning {
+                            println!("[terra] scanning for BLE devices (missing={missing}, native={})", me.native_scanning.load(Ordering::SeqCst));
+                        }
+                        scanning = started;
+                    }
+                } else if scanning {
                     let _ = call_ble_manager("stopScan", "()V", &[]);
                     scanning = false;
                 }
@@ -1612,15 +2397,37 @@ impl Broker {
         }
     }
 
-    async fn remembered_match(&self, filters: &[Filter], excl: &[Filter], all: bool) -> Option<DeviceInfo> {
+    async fn remembered_match(
+        &self,
+        filters: &[Filter],
+        excl: &[Filter],
+        all: bool,
+        exclude_ids: &[String],
+    ) -> Option<DeviceInfo> {
         let known = self.known.lock().await.clone();
         if known.is_empty() {
             return None;
         }
         let released = self.released.lock().await.clone();
+        let excluded_names = crate::addons::bt_exclude_names(&self.app);
         let mut best: Option<(u8, DiscoveredProps)> = None;
-        for props in self.discovered_devices() {
-            if !known.iter().any(|k| k.id == props.id && k.owner.as_ref().map_or(true, |o| released.contains(o))) {
+        for mut props in self.discovered_devices() {
+            if exclude_ids.iter().any(|x| x == &props.id) {
+                continue;
+            }
+            let Some(k) = known
+                .iter()
+                .find(|k| k.id == props.id && k.owner.as_ref().map_or(true, |o| released.contains(o)))
+            else {
+                continue;
+            };
+            if k.name.as_deref().map_or(false, |n| excluded_names.contains(n)) {
+                continue;
+            }
+            if props.name.is_none() {
+                props.name = k.name.clone();
+            }
+            if props.name.as_deref().map_or(false, |n| excluded_names.contains(n)) {
                 continue;
             }
             if !wanted(&props, filters, excl, all) {
@@ -1642,10 +2449,11 @@ impl Broker {
         accept_all: bool,
         silent: bool,
         owner: Option<String>,
+        exclude_ids: Vec<String>,
     ) -> Result<DeviceInfo, String> {
         alog(&format!("request_device called: silent={} accept_all={} owner={:?}", silent, accept_all, owner));
         if owner.is_none() && silent {
-            if let Some(info) = self.remembered_match(&filters, &exclusions, accept_all).await {
+            if let Some(info) = self.remembered_match(&filters, &exclusions, accept_all, &exclude_ids).await {
                 alog(&format!("remembered match: {:?}", info.name));
                 return Ok(info);
             }
@@ -1726,87 +2534,255 @@ impl Broker {
         out
     }
 
-    pub async fn connect(&self, id: &str) -> Result<Vec<ServiceInfo>, String> {
-        let vm = get_java_vm()?;
-        let env = vm.attach_current_thread().map_err(err)?;
-        let j_id = env.new_string(id).map_err(err)?;
-        let res = call_ble_manager("connect", "(Ljava/lang/String;)Ljava/lang/String;", &[jni::objects::JValue::Object(&j_id)])?;
-        if res.starts_with("Error:") {
-            return Err(res);
-        }
-        serde_json::from_str(&res).map_err(err)
-    }
-
-    pub async fn disconnect(&self, id: &str) -> Result<(), String> {
-        let is_known = self.known.lock().await.iter().any(|k| k.id == id);
-        let vm = get_java_vm()?;
-        let env = vm.attach_current_thread().map_err(err)?;
-        let j_id = env.new_string(id).map_err(err)?;
-
-        if is_known {
-            let _ = call_ble_manager("unsubscribeAll", "(Ljava/lang/String;)Ljava/lang/String;", &[jni::objects::JValue::Object(&j_id)]);
-        } else {
-            let _ = call_ble_manager("disconnect", "(Ljava/lang/String;)V", &[jni::objects::JValue::Object(&j_id)]);
+    pub async fn set_native_scan(&self, on: bool) -> Result<(), String> {
+        self.native_scanning.store(on, Ordering::SeqCst);
+        if on {
+            if self.connect_gate.try_lock().is_ok() {
+                let _ = call_ble_manager("startScan", "()Z", &[]);
+            }
+        } else if self.pending.lock().await.is_none() {
+            let known = self.known.lock().await.clone();
+            let excluded = crate::addons::bt_exclude_names(&self.app);
+            let any_missing = known.iter().any(|k| {
+                !k.name.as_deref().map_or(false, |n| excluded.contains(n))
+                    && !self.is_connected(&k.id)
+            });
+            if !any_missing {
+                let _ = call_ble_manager("stopScan", "()V", &[]);
+            }
         }
         Ok(())
     }
 
-    pub async fn read(&self, id: &str, s: &str, c: &str) -> Result<String, String> {
-        let vm = get_java_vm()?;
-        let env = vm.attach_current_thread().map_err(err)?;
-        let j_id = env.new_string(id).map_err(err)?;
-        let j_s = env.new_string(s).map_err(err)?;
-        let j_c = env.new_string(c).map_err(err)?;
-        let res = call_ble_manager("readCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", &[
-            jni::objects::JValue::Object(&j_id),
-            jni::objects::JValue::Object(&j_s),
-            jni::objects::JValue::Object(&j_c),
-        ])?;
-        if res.starts_with("Error:") {
-            Err(res)
-        } else {
-            Ok(res)
+    pub async fn remember_device(&self, id: String, name: Option<String>) -> Result<(), String> {
+        let resolved_name = match name {
+            Some(n) if !n.is_empty() => Some(n),
+            _ => self
+                .discovered_devices()
+                .into_iter()
+                .find(|d| d.id == id)
+                .and_then(|d| d.name),
+        };
+        self.remember(&DeviceInfo { id, name: resolved_name }, None).await;
+        Ok(())
+    }
+
+    pub async fn scan_candidates(&self, filter_uuids: Vec<String>) -> Vec<BleDeviceStatus> {
+        let known = self.known.lock().await.clone();
+        let connecting = self.connecting.lock().await.clone();
+        let released = self.released.lock().await.clone();
+        let excluded_names = crate::addons::bt_exclude_names(&self.app);
+        let filters: Vec<Filter> = filter_uuids
+            .into_iter()
+            .map(|u| Filter { services: Some(vec![u]), name: None, name_prefix: None })
+            .collect();
+
+        let mut seen = HashSet::new();
+        let mut items = self.discovered_devices();
+        for d in &items {
+            seen.insert(d.id.clone());
         }
+        // Include remembered non-addon devices that are currently connected or connecting
+        // even if they haven't emitted an advertisement packet in the current window.
+        for k in &known {
+            if seen.contains(&k.id) {
+                continue;
+            }
+            if self.is_connected(&k.id) || connecting.contains(&k.id) {
+                items.push(DiscoveredProps {
+                    id: k.id.clone(),
+                    name: k.name.clone(),
+                    rssi: Some(-50),
+                    services: vec![],
+                });
+            }
+        }
+
+        let mut out: Vec<(u8, Option<i16>, BleDeviceStatus)> = Vec::new();
+        for mut props in items {
+            let id = props.id.clone();
+            let connected = self.is_connected(&id);
+            let is_connecting = connecting.contains(&id);
+            let known_entry = known.iter().find(|k| k.id == id);
+            if let Some(k) = known_entry {
+                if k.owner.as_ref().map_or(false, |o| !released.contains(o)) {
+                    continue;
+                }
+                if k.name.as_deref().map_or(false, |n| excluded_names.contains(n)) {
+                    continue;
+                }
+            }
+            if props.name.is_none() {
+                props.name = known_entry.and_then(|k| k.name.clone());
+            }
+            if props.name.as_deref().map_or(false, |n| excluded_names.contains(n)) {
+                continue;
+            }
+            let remembered = known_entry.is_some();
+            if !remembered && !filters.is_empty() && !chooser_matches(&props, &filters, &[], false) {
+                continue;
+            }
+            let r = rank(&props);
+            out.push((
+                r,
+                props.rssi,
+                BleDeviceStatus {
+                    id,
+                    name: props.name,
+                    owner: known_entry.and_then(|k| k.owner.clone()),
+                    connected,
+                    connecting: is_connecting,
+                    remembered,
+                },
+            ));
+        }
+        out.sort_by(|a, b| {
+            b.2.connected
+                .cmp(&a.2.connected)
+                .then(b.2.remembered.cmp(&a.2.remembered))
+                .then(a.0.cmp(&b.0))
+                .then(b.1.cmp(&a.1))
+        });
+        out.into_iter().map(|(_, _, s)| s).collect()
+    }
+
+    async fn connect_gated(&self, id: &str) -> Result<Vec<ServiceInfo>, String> {
+        // Don't grab `connect_gate` or stop BLE scanning for a device that isn't even
+        // connected or advertising right now (e.g. a switched-off remembered Zwift Ride
+        // controller being retried by an addon). Mirrors desktop `self.get(id)?`.
+        if !self.is_connected(id) && !self.discovered_devices().iter().any(|d| d.id == id) {
+            if self.connect_gate.try_lock().is_ok() {
+                let _ = call_ble_manager("startScan", "()Z", &[]);
+            }
+            return Err(format!("Device {id} not currently advertising"));
+        }
+        let _gate = self.connect_gate.lock().await;
+        let id_owned = id.to_string();
+        let res = tokio::task::spawn_blocking(move || {
+            let vm = get_java_vm()?;
+            let env = vm.attach_current_thread().map_err(err)?;
+            let j_id = env.new_string(&id_owned).map_err(err)?;
+            let res = call_ble_manager(
+                "connect",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                &[jni::objects::JValue::Object(&j_id)],
+            )?;
+            if res.starts_with("Error:") {
+                return Err(res);
+            }
+            serde_json::from_str(&res).map_err(err)
+        })
+        .await
+        .map_err(err)?;
+        drop(_gate);
+        // Resume scanning immediately if native scan is still active and no other connect is queued.
+        if self.native_scanning.load(Ordering::SeqCst) && self.connect_gate.try_lock().is_ok() {
+            let _ = call_ble_manager("startScan", "()Z", &[]);
+        }
+        res
+    }
+
+    pub async fn connect(&self, id: &str) -> Result<Vec<ServiceInfo>, String> {
+        let inserted = self.connecting.lock().await.insert(id.to_string());
+        let res = self.connect_gated(id).await;
+        if inserted {
+            self.connecting.lock().await.remove(id);
+        }
+        res
+    }
+
+    pub async fn connect_with_wait(&self, id: &str, _wait_visible: bool) -> Result<Vec<ServiceInfo>, String> {
+        self.connect(id).await
+    }
+
+    pub async fn disconnect(&self, id: &str) -> Result<(), String> {
+        let is_known = self.known.lock().await.iter().any(|k| k.id == id);
+        let id_owned = id.to_string();
+        let _ = tokio::task::spawn_blocking(move || {
+            let Ok(vm) = get_java_vm() else { return };
+            let Ok(env) = vm.attach_current_thread() else { return };
+            let Ok(j_id) = env.new_string(&id_owned) else { return };
+            if is_known {
+                let _ = call_ble_manager("unsubscribeAll", "(Ljava/lang/String;)Ljava/lang/String;", &[jni::objects::JValue::Object(&j_id)]);
+            } else {
+                let _ = call_ble_manager("disconnect", "(Ljava/lang/String;)V", &[jni::objects::JValue::Object(&j_id)]);
+            }
+        })
+        .await;
+        Ok(())
+    }
+
+    pub async fn read(&self, id: &str, s: &str, c: &str) -> Result<String, String> {
+        let (id, s, c) = (id.to_string(), s.to_string(), c.to_string());
+        tokio::task::spawn_blocking(move || {
+            let vm = get_java_vm()?;
+            let env = vm.attach_current_thread().map_err(err)?;
+            let j_id = env.new_string(&id).map_err(err)?;
+            let j_s = env.new_string(&s).map_err(err)?;
+            let j_c = env.new_string(&c).map_err(err)?;
+            let res = call_ble_manager("readCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", &[
+                jni::objects::JValue::Object(&j_id),
+                jni::objects::JValue::Object(&j_s),
+                jni::objects::JValue::Object(&j_c),
+            ])?;
+            if res.starts_with("Error:") {
+                Err(res)
+            } else {
+                Ok(res)
+            }
+        })
+        .await
+        .map_err(err)?
     }
 
     pub async fn write(&self, id: &str, s: &str, c: &str, value: &str, with_response: bool) -> Result<(), String> {
-        let vm = get_java_vm()?;
-        let env = vm.attach_current_thread().map_err(err)?;
-        let j_id = env.new_string(id).map_err(err)?;
-        let j_s = env.new_string(s).map_err(err)?;
-        let j_c = env.new_string(c).map_err(err)?;
-        let j_v = env.new_string(value).map_err(err)?;
-        let res = call_ble_manager("writeCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;", &[
-            jni::objects::JValue::Object(&j_id),
-            jni::objects::JValue::Object(&j_s),
-            jni::objects::JValue::Object(&j_c),
-            jni::objects::JValue::Object(&j_v),
-            jni::objects::JValue::Bool(if with_response { 1 } else { 0 }),
-        ])?;
-        if res.starts_with("Error:") {
-            Err(res)
-        } else {
-            Ok(())
-        }
+        let (id, s, c, value) = (id.to_string(), s.to_string(), c.to_string(), value.to_string());
+        tokio::task::spawn_blocking(move || {
+            let vm = get_java_vm()?;
+            let env = vm.attach_current_thread().map_err(err)?;
+            let j_id = env.new_string(&id).map_err(err)?;
+            let j_s = env.new_string(&s).map_err(err)?;
+            let j_c = env.new_string(&c).map_err(err)?;
+            let j_v = env.new_string(&value).map_err(err)?;
+            let res = call_ble_manager("writeCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;", &[
+                jni::objects::JValue::Object(&j_id),
+                jni::objects::JValue::Object(&j_s),
+                jni::objects::JValue::Object(&j_c),
+                jni::objects::JValue::Object(&j_v),
+                jni::objects::JValue::Bool(if with_response { 1 } else { 0 }),
+            ])?;
+            if res.starts_with("Error:") {
+                Err(res)
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .map_err(err)?
     }
 
     pub async fn subscribe(&self, id: &str, s: &str, c: &str, on: bool) -> Result<(), String> {
-        let vm = get_java_vm()?;
-        let env = vm.attach_current_thread().map_err(err)?;
-        let j_id = env.new_string(id).map_err(err)?;
-        let j_s = env.new_string(s).map_err(err)?;
-        let j_c = env.new_string(c).map_err(err)?;
-        let res = call_ble_manager("subscribeCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;", &[
-            jni::objects::JValue::Object(&j_id),
-            jni::objects::JValue::Object(&j_s),
-            jni::objects::JValue::Object(&j_c),
-            jni::objects::JValue::Bool(if on { 1 } else { 0 }),
-        ])?;
-        if res.starts_with("Error:") {
-            Err(res)
-        } else {
-            Ok(())
-        }
+        let (id, s, c) = (id.to_string(), s.to_string(), c.to_string());
+        tokio::task::spawn_blocking(move || {
+            let vm = get_java_vm()?;
+            let env = vm.attach_current_thread().map_err(err)?;
+            let j_id = env.new_string(&id).map_err(err)?;
+            let j_s = env.new_string(&s).map_err(err)?;
+            let j_c = env.new_string(&c).map_err(err)?;
+            let res = call_ble_manager("subscribeCharacteristic", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;", &[
+                jni::objects::JValue::Object(&j_id),
+                jni::objects::JValue::Object(&j_s),
+                jni::objects::JValue::Object(&j_c),
+                jni::objects::JValue::Bool(if on { 1 } else { 0 }),
+            ])?;
+            if res.starts_with("Error:") {
+                Err(res)
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .map_err(err)?
     }
 
     fn save_known(&self, k: &[Remembered]) {
@@ -1819,7 +2795,9 @@ impl Broker {
         let mut k = self.known.lock().await;
         match k.iter_mut().find(|x| x.id == info.id) {
             Some(e) => {
-                e.name = info.name.clone();
+                if info.name.is_some() {
+                    e.name = info.name.clone();
+                }
                 if owner.is_some() {
                     e.owner = owner;
                 }
@@ -1871,15 +2849,18 @@ impl Broker {
 
     pub async fn devices_status(&self) -> Vec<BleDeviceStatus> {
         let known = self.known.lock().await.clone();
+        let connecting = self.connecting.lock().await.clone();
         known
             .into_iter()
             .map(|k| {
                 let connected = self.is_connected(&k.id);
+                let is_connecting = connecting.contains(&k.id);
                 BleDeviceStatus {
                     id: k.id,
                     name: k.name,
                     owner: k.owner,
                     connected,
+                    connecting: is_connecting,
                     remembered: true,
                 }
             })
@@ -1914,9 +2895,17 @@ pub async fn ble_request_device(
     accept_all: bool,
     silent: Option<bool>,
     owner: Option<String>,
+    exclude_ids: Option<Vec<String>>,
 ) -> Result<DeviceInfo, String> {
     broker(&state)?
-        .request_device(filters, exclusion_filters.unwrap_or_default(), accept_all, silent.unwrap_or(false), owner)
+        .request_device(
+            filters,
+            exclusion_filters.unwrap_or_default(),
+            accept_all,
+            silent.unwrap_or(false),
+            owner,
+            exclude_ids.unwrap_or_default(),
+        )
         .await
 }
 
@@ -1950,9 +2939,44 @@ pub async fn ble_release(state: State<'_, Ble>, owner: String, released: bool) -
 
 #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
-pub async fn ble_connect(state: State<'_, Ble>, id: String) -> Result<Vec<ServiceInfo>, String> {
-    let r = broker(&state)?.connect(&id).await;
+pub async fn ble_connect(
+    state: State<'_, Ble>,
+    id: String,
+    wait_visible: Option<bool>,
+) -> Result<Vec<ServiceInfo>, String> {
+    let r = broker(&state)?.connect_with_wait(&id, wait_visible.unwrap_or(false)).await;
     logged("connect", &id, r)
+}
+
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
+pub async fn ble_native_scan_start(state: State<'_, Ble>) -> Result<(), String> {
+    broker(&state)?.set_native_scan(true).await
+}
+
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
+pub async fn ble_native_scan_stop(state: State<'_, Ble>) -> Result<(), String> {
+    broker(&state)?.set_native_scan(false).await
+}
+
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
+pub async fn ble_scan_candidates(
+    state: State<'_, Ble>,
+    filter_uuids: Option<Vec<String>>,
+) -> Result<Vec<BleDeviceStatus>, String> {
+    Ok(broker(&state)?.scan_candidates(filter_uuids.unwrap_or_default()).await)
+}
+
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
+pub async fn ble_remember(
+    state: State<'_, Ble>,
+    id: String,
+    name: Option<String>,
+) -> Result<(), String> {
+    broker(&state)?.remember_device(id, name).await
 }
 
 #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), tauri::command)]

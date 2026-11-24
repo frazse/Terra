@@ -351,6 +351,18 @@
           "markdownDescription": "Enables the ble_forget command without any pre-configured scope."
         },
         {
+          "description": "Enables the ble_native_scan_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ble-native-scan-start",
+          "markdownDescription": "Enables the ble_native_scan_start command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ble_native_scan_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ble-native-scan-stop",
+          "markdownDescription": "Enables the ble_native_scan_stop command without any pre-configured scope."
+        },
+        {
           "description": "Enables the ble_read command without any pre-configured scope.",
           "type": "string",
           "const": "allow-ble-read",
@@ -363,6 +375,12 @@
           "markdownDescription": "Enables the ble_release command without any pre-configured scope."
         },
         {
+          "description": "Enables the ble_remember command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ble-remember",
+          "markdownDescription": "Enables the ble_remember command without any pre-configured scope."
+        },
+        {
           "description": "Enables the ble_remembered command without any pre-configured scope.",
           "type": "string",
           "const": "allow-ble-remembered",
@@ -373,6 +391,12 @@
           "type": "string",
           "const": "allow-ble-request-device",
           "markdownDescription": "Enables the ble_request_device command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ble_scan_candidates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ble-scan-candidates",
+          "markdownDescription": "Enables the ble_scan_candidates command without any pre-configured scope."
         },
         {
           "description": "Enables the ble_subscribe command without any pre-configured scope.",
@@ -459,10 +483,22 @@
           "markdownDescription": "Enables the shim_log command without any pre-configured scope."
         },
         {
+          "description": "Enables the terra_backup_ride command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-backup-ride",
+          "markdownDescription": "Enables the terra_backup_ride command without any pre-configured scope."
+        },
+        {
           "description": "Enables the terra_data_dir_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-terra-data-dir-status",
           "markdownDescription": "Enables the terra_data_dir_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_delete_ride_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-delete-ride-backup",
+          "markdownDescription": "Enables the terra_delete_ride_backup command without any pre-configured scope."
         },
         {
           "description": "Enables the terra_dismiss_data_dir_prompt command without any pre-configured scope.",
@@ -471,10 +507,34 @@
           "markdownDescription": "Enables the terra_dismiss_data_dir_prompt command without any pre-configured scope."
         },
         {
+          "description": "Enables the terra_export_ride_gpx command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-export-ride-gpx",
+          "markdownDescription": "Enables the terra_export_ride_gpx command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_export_webview_storage command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-export-webview-storage",
+          "markdownDescription": "Enables the terra_export_webview_storage command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_list_ride_backups command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-list-ride-backups",
+          "markdownDescription": "Enables the terra_list_ride_backups command without any pre-configured scope."
+        },
+        {
           "description": "Enables the terra_pick_data_dir command without any pre-configured scope.",
           "type": "string",
           "const": "allow-terra-pick-data-dir",
           "markdownDescription": "Enables the terra_pick_data_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_read_ride_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-read-ride-backup",
+          "markdownDescription": "Enables the terra_read_ride_backup command without any pre-configured scope."
         },
         {
           "description": "Enables the terra_reset_all_data command without any pre-configured scope.",
@@ -657,6 +717,18 @@
           "markdownDescription": "Denies the ble_forget command without any pre-configured scope."
         },
         {
+          "description": "Denies the ble_native_scan_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ble-native-scan-start",
+          "markdownDescription": "Denies the ble_native_scan_start command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ble_native_scan_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ble-native-scan-stop",
+          "markdownDescription": "Denies the ble_native_scan_stop command without any pre-configured scope."
+        },
+        {
           "description": "Denies the ble_read command without any pre-configured scope.",
           "type": "string",
           "const": "deny-ble-read",
@@ -669,6 +741,12 @@
           "markdownDescription": "Denies the ble_release command without any pre-configured scope."
         },
         {
+          "description": "Denies the ble_remember command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ble-remember",
+          "markdownDescription": "Denies the ble_remember command without any pre-configured scope."
+        },
+        {
           "description": "Denies the ble_remembered command without any pre-configured scope.",
           "type": "string",
           "const": "deny-ble-remembered",
@@ -679,6 +757,12 @@
           "type": "string",
           "const": "deny-ble-request-device",
           "markdownDescription": "Denies the ble_request_device command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ble_scan_candidates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ble-scan-candidates",
+          "markdownDescription": "Denies the ble_scan_candidates command without any pre-configured scope."
         },
         {
           "description": "Denies the ble_subscribe command without any pre-configured scope.",
@@ -765,10 +849,22 @@
           "markdownDescription": "Denies the shim_log command without any pre-configured scope."
         },
         {
+          "description": "Denies the terra_backup_ride command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-backup-ride",
+          "markdownDescription": "Denies the terra_backup_ride command without any pre-configured scope."
+        },
+        {
           "description": "Denies the terra_data_dir_status command without any pre-configured scope.",
           "type": "string",
           "const": "deny-terra-data-dir-status",
           "markdownDescription": "Denies the terra_data_dir_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_delete_ride_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-delete-ride-backup",
+          "markdownDescription": "Denies the terra_delete_ride_backup command without any pre-configured scope."
         },
         {
           "description": "Denies the terra_dismiss_data_dir_prompt command without any pre-configured scope.",
@@ -777,10 +873,34 @@
           "markdownDescription": "Denies the terra_dismiss_data_dir_prompt command without any pre-configured scope."
         },
         {
+          "description": "Denies the terra_export_ride_gpx command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-export-ride-gpx",
+          "markdownDescription": "Denies the terra_export_ride_gpx command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_export_webview_storage command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-export-webview-storage",
+          "markdownDescription": "Denies the terra_export_webview_storage command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_list_ride_backups command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-list-ride-backups",
+          "markdownDescription": "Denies the terra_list_ride_backups command without any pre-configured scope."
+        },
+        {
           "description": "Denies the terra_pick_data_dir command without any pre-configured scope.",
           "type": "string",
           "const": "deny-terra-pick-data-dir",
           "markdownDescription": "Denies the terra_pick_data_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_read_ride_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-read-ride-backup",
+          "markdownDescription": "Denies the terra_read_ride_backup command without any pre-configured scope."
         },
         {
           "description": "Denies the terra_reset_all_data command without any pre-configured scope.",

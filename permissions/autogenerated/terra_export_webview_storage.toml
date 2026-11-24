@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-export-webview-storage"
+description = "Enables the terra_export_webview_storage command without any pre-configured scope."
+commands.allow = ["terra_export_webview_storage"]
+
+[[permission]]
+identifier = "deny-terra-export-webview-storage"
+description = "Denies the terra_export_webview_storage command without any pre-configured scope."
+commands.deny = ["terra_export_webview_storage"]

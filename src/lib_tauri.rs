@@ -22,6 +22,10 @@ pub fn run() {
             crate::ble::ble_disconnect_all,
             crate::ble::ble_forget,
             crate::ble::ble_devices_status,
+            crate::ble::ble_native_scan_start,
+            crate::ble::ble_native_scan_stop,
+            crate::ble::ble_scan_candidates,
+            crate::ble::ble_remember,
             crate::ble::ble_drop_device,
             crate::ble::ble_drop_all,
             crate::ble::ble_remembered,
@@ -68,6 +72,10 @@ pub fn run() {
             crate::android_data_dir::terra_reset_all_data,
             crate::android_data_dir::terra_export_webview_storage,
             crate::android_data_dir::terra_backup_ride,
+            crate::android_data_dir::terra_list_ride_backups,
+            crate::android_data_dir::terra_read_ride_backup,
+            crate::android_data_dir::terra_export_ride_gpx,
+            crate::android_data_dir::terra_delete_ride_backup,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -79,6 +87,10 @@ pub fn run() {
                     eprintln!("[terra] BLE unavailable: {e}");
                     None
                 }
+            };
+            let remembered_ids: Vec<String> = match broker.as_ref() {
+                Some(b) => tauri::async_runtime::block_on(b.remembered_page_ids()),
+                None => Vec::new(),
             };
             handle.manage(crate::ble::Ble(broker));
 
@@ -117,7 +129,14 @@ pub fn run() {
                 });
             } else {
                 // Normal mode: create the webview window
-                let init = format!("{SHIM}\n;\n{LOADER}\n;\n{UI}");
+                let ids_json = serde_json::to_string(&remembered_ids).unwrap_or_else(|_| "[]".to_string());
+                #[cfg(target_os = "android")]
+                let boot_prefix = format!(
+                    "window.__terraAndroid = true; window.__terraRememberedIds = {ids_json};"
+                );
+                #[cfg(not(target_os = "android"))]
+                let boot_prefix = format!("window.__terraRememberedIds = {ids_json};");
+                let init = format!("{boot_prefix}\n;\n{SHIM}\n;\n{LOADER}\n;\n{UI}");
                 WebviewWindowBuilder::new(
                     app,
                     "main",

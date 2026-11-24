@@ -48,9 +48,27 @@ try {
   const loader = fs.readFileSync(loaderPath, 'utf8');
   const ui = fs.readFileSync(uiPath, 'utf8');
 
-  const fullInit = `${shim}\n;\n${loader}\n;\n${ui}`;
+  // Read Terra's remembered non-addon device IDs synchronously so bluetooth-shim.js
+  // can seed Biketerra's native `saved-devices` before Biketerra's JS bundle loads.
+  let rememberedIds = [];
+  try {
+    const os = require('os');
+    const dataDir = process.platform === 'linux'
+      ? path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'terra')
+      : process.platform === 'win32'
+        ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'terra')
+        : path.join(os.homedir(), 'Library', 'Application Support', 'terra');
+    const raw = fs.readFileSync(path.join(dataDir, 'devices.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      rememberedIds = parsed.filter((d) => d && d.id && !d.owner).map((d) => d.id);
+    }
+  } catch {}
 
-  // Execute in main world so page JS sees navigator.bluetooth and shims
+  const desktopBoot = `window.__terraDesktop = true; window.__terraRememberedIds = ${JSON.stringify(rememberedIds)};`;
+  const fullInit = `${desktopBoot}\n;\n${shim}\n;\n${loader}\n;\n${ui}`;
+
+  // Execute in main world so page JS sees navigator.bluetooth, window.native, and shims
   webFrame.executeJavaScriptInIsolatedWorld(0, [
     { code: fullInit }
   ]);

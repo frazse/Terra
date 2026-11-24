@@ -439,6 +439,9 @@ if (process.platform === 'linux') {
     app.commandLine.appendSwitch('use-angle', 'vulkan');
     console.log('[electron] Frame generation enabled at boot:', bootFramegenConfig.mode, 'dll:', bootFramegenConfig.dllPath);
   }
+  if (typeof app.setDesktopName === 'function') {
+    app.setDesktopName('terra-desktop.desktop');
+  }
 }
 
 let mainWindow;
@@ -854,13 +857,83 @@ async function btappEnsure(wc) {
   }
 }
 
+function resolveWindowIconPath() {
+  const iconFile = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
+  const candidates = [
+    path.join(process.resourcesPath, 'icons', iconFile),
+    path.join(__dirname, '..', 'icons', iconFile)
+  ];
+  return candidates.find((p) => {
+    try { return fs.existsSync(p); } catch { return false; }
+  }) || null;
+}
+
+function ensureLinuxAppImageIcon(iconSrc) {
+  if (process.platform !== 'linux' || !process.env.APPIMAGE || !iconSrc) return;
+  try {
+    const xdgData = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+    const iconDir = path.join(xdgData, 'icons', 'hicolor', '512x512', 'apps');
+    const iconDest = path.join(iconDir, 'terra-desktop.png');
+    fs.mkdirSync(iconDir, { recursive: true });
+
+    const srcBuf = fs.readFileSync(iconSrc);
+    let needIconWrite = true;
+    try {
+      if (fs.existsSync(iconDest) && fs.readFileSync(iconDest).equals(srcBuf)) {
+        needIconWrite = false;
+      }
+    } catch {}
+    if (needIconWrite) {
+      fs.writeFileSync(iconDest, srcBuf);
+    }
+
+    const appsDir = path.join(xdgData, 'applications');
+    const desktopPath = path.join(appsDir, 'terra-desktop.desktop');
+    const managedMarker = '# Managed by Terra AppImage';
+    if (fs.existsSync(desktopPath)) {
+      const existing = fs.readFileSync(desktopPath, 'utf8');
+      if (!existing.includes(managedMarker)) {
+        // Respect user- or Gear Lever/AppImageLauncher-managed desktop entries.
+        return;
+      }
+    }
+
+    fs.mkdirSync(appsDir, { recursive: true });
+    const escapedExec = process.env.APPIMAGE.replace(/([\\"$`])/g, '\\$1');
+    const desktopContent = [
+      '[Desktop Entry]',
+      managedMarker,
+      'Type=Application',
+      'Name=Terra',
+      'Comment=Biketerra Companion App',
+      `Icon=${iconDest}`,
+      `Exec="${escapedExec}" %U`,
+      'Terminal=false',
+      'Categories=Sports;',
+      'StartupWMClass=terra-desktop',
+      'NoDisplay=true',
+      ''
+    ].join('\n');
+
+    let needDesktopWrite = true;
+    try {
+      if (fs.existsSync(desktopPath) && fs.readFileSync(desktopPath, 'utf8') === desktopContent) {
+        needDesktopWrite = false;
+      }
+    } catch {}
+    if (needDesktopWrite) {
+      fs.writeFileSync(desktopPath, desktopContent, 'utf8');
+    }
+  } catch (e) {
+    console.warn('[electron] Failed to install Wayland AppImage icon shim:', e && e.message ? e.message : e);
+  }
+}
+
 function createWindow() {
   Menu.setApplicationMenu(null);
 
-  const iconCandidates = process.platform === 'win32'
-    ? [path.join(__dirname, '..', 'icons', 'icon.ico'), path.join(process.resourcesPath, 'icons', 'icon.ico')]
-    : [path.join(__dirname, '..', 'icons', 'icon.png')];
-  const windowIcon = iconCandidates.find((p) => fs.existsSync(p));
+  const windowIcon = resolveWindowIconPath();
+  ensureLinuxAppImageIcon(windowIcon);
 
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -920,6 +993,7 @@ function createWindow() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       event.preventDefault();
       const win = mainWindow;
+      try { win.hide(); } catch {}
       gracefulShutdownRust({ dispatchPagehide: true }).finally(() => {
         if (win && !win.isDestroyed()) {
           win.destroy();
@@ -962,9 +1036,10 @@ function gracefulShutdownRust({ dispatchPagehide = false } = {}) {
         try {
           const r = await Promise.race([
             sendRpc('ble_disconnect_all', {}),
-            new Promise((r) => setTimeout(() => r({ __timeout: true }), 2000))
+            new Promise((r) => setTimeout(() => r({ __timeout: true }), 8000))
           ]);
-          if (r && r.__error) console.error('[electron] ble_disconnect_all failed:', r.__error);
+          if (r && r.__timeout) console.warn('[electron] ble_disconnect_all timed out after 8000ms');
+          else if (r && r.__error) console.error('[electron] ble_disconnect_all failed:', r.__error);
         } catch (e) {
           console.error('[electron] ble_disconnect_all failed:', e);
         }

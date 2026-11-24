@@ -1,6 +1,6 @@
 {
   "name": "terra-desktop",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "Terra Desktop - Biketerra Companion App (Chromium)",
   "main": "main.js",
   "scripts": {
@@ -33,6 +33,14 @@
       {
         "from": "../shim",
         "to": "shim"
+      },
+      {
+        "from": "../icons",
+        "to": "icons",
+        "filter": [
+          "icon.png",
+          "icon.ico"
+        ]
       }
     ],
     "files": [
@@ -44,7 +52,11 @@
         "AppImage"
       ],
       "icon": "../icons/icon.png",
-      "category": "Sports"
+      "category": "Sports",
+      "desktop": {
+        "Name": "Terra",
+        "StartupWMClass": "terra-desktop"
+      }
     },
     "win": {
       "target": [

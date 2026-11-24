@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-backup-ride"
+description = "Enables the terra_backup_ride command without any pre-configured scope."
+commands.allow = ["terra_backup_ride"]
+
+[[permission]]
+identifier = "deny-terra-backup-ride"
+description = "Denies the terra_backup_ride command without any pre-configured scope."
+commands.deny = ["terra_backup_ride"]

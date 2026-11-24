@@ -1339,6 +1339,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
               if (backupCountEl && typeof r.backupsCount === 'number') {
                 backupCountEl.textContent = ' (' + r.backupsCount + ' saved)';
               }
+              if (backupsBox.open) refreshBackupsList();
             } else if (r.found > 0) {
               statusMsg.textContent = 'Ride backup is already up to date.';
             } else {
@@ -1378,7 +1379,102 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           h('span', {}, 'Auto-backup in-progress rides to ride-backups/'),
           backupCountEl
         );
-        ddSection.append(actions, autoRow);
+
+        const backupsListEl = h('div', { style: 'display:flex;flex-direction:column;gap:6px;margin-top:8px;' });
+        const backupsBox = h('details', { style: 'margin-top:8px;border-top:1px solid #262632;padding-top:6px;' },
+          h('summary', { style: 'cursor:pointer;color:#bbb;font-size:12px;user-select:none;' }, 'Saved ride backups'),
+          backupsListEl
+        );
+
+        async function refreshBackupsList() {
+          backupsListEl.replaceChildren(h('div', { style: 'color:#888;font-size:11px;' }, 'Loading\u2026'));
+          try {
+            const res = await core.call('terra_list_ride_backups', {});
+            const list = (res && Array.isArray(res.backups)) ? res.backups : [];
+            backupCountEl.textContent = ' (' + list.length + ' saved)';
+            if (list.length === 0) {
+              backupsListEl.replaceChildren(h('div', { style: 'color:#888;font-size:11px;' }, 'No ride backups saved yet.'));
+              return;
+            }
+            const nodes = list.map((b) => {
+              const km = ((b.maxDist || 0) / 1000).toFixed(2) + ' km';
+              const dt = b.startTs ? new Date(b.startTs).toLocaleString() : (b.modifiedMs ? new Date(b.modifiedMs).toLocaleString() : b.filename);
+              const metaParts = [km, (b.rows || 0) + ' pts'];
+              if (b.avgPower) metaParts.push(b.avgPower + 'W avg');
+              if (b.maxHr) metaParts.push(b.maxHr + ' max bpm');
+
+              const restoreBtn = h('button', { class: 'terra-btn', type: 'button', style: 'padding:3px 8px;font-size:11px;' }, 'Restore');
+              restoreBtn.addEventListener('click', async () => {
+                if (!confirm('Restore ' + b.key + ' (' + km + ') into Biketerra IndexedDB?\n\nThis will overwrite any current in-progress data for ' + b.key + '.')) return;
+                restoreBtn.disabled = true;
+                restoreBtn.textContent = 'Restoring\u2026';
+                statusMsg.className = '';
+                statusMsg.textContent = '';
+                try {
+                  const data = await core.call('terra_read_ride_backup', { filename: b.filename });
+                  const parsed = JSON.parse(data.payload);
+                  await restoreKeyvalRide(data.key || b.key, parsed);
+                  statusMsg.className = 'terra-dd-restart';
+                  statusMsg.textContent = 'Restored ' + (data.key || b.key) + ' into Biketerra IndexedDB. Open that route/event (or reload) to resume/save.';
+                  core.log('terra-ui', 'restored ride backup: ' + b.filename);
+                } catch (e) {
+                  statusMsg.className = 'terra-dd-error';
+                  statusMsg.textContent = 'Restore failed: ' + e;
+                }
+                restoreBtn.disabled = false;
+                restoreBtn.textContent = 'Restore';
+              });
+
+              const gpxBtn = h('button', { class: 'terra-btn', type: 'button', style: 'padding:3px 8px;font-size:11px;' }, 'GPX');
+              gpxBtn.addEventListener('click', async () => {
+                gpxBtn.disabled = true;
+                gpxBtn.textContent = '\u2026';
+                statusMsg.className = '';
+                statusMsg.textContent = '';
+                try {
+                  const r = await core.call('terra_export_ride_gpx', { filename: b.filename });
+                  statusMsg.className = 'terra-dd-restart';
+                  statusMsg.textContent = 'Exported GPX (' + r.points + ' pts) to ' + r.path;
+                  core.log('terra-ui', 'exported ride gpx: ' + r.path);
+                } catch (e) {
+                  statusMsg.className = 'terra-dd-error';
+                  statusMsg.textContent = 'GPX export failed: ' + e;
+                }
+                gpxBtn.disabled = false;
+                gpxBtn.textContent = 'GPX';
+              });
+
+              const delBtn = h('button', { class: 'terra-btn-danger', type: 'button', title: 'Delete backup', style: 'padding:3px 7px;font-size:11px;' }, '\u00d7');
+              delBtn.addEventListener('click', async () => {
+                if (!confirm('Delete backup ' + b.filename + '?')) return;
+                try {
+                  await core.call('terra_delete_ride_backup', { filename: b.filename });
+                  refreshBackupsList();
+                } catch (e) {
+                  statusMsg.className = 'terra-dd-error';
+                  statusMsg.textContent = 'Delete failed: ' + e;
+                }
+              });
+
+              return h('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;background:#181822;border:1px solid #2a2a38;border-radius:6px;flex-wrap:wrap;' },
+                h('div', { style: 'min-width:0;flex:1;' },
+                  h('div', { style: 'color:#e4e4ec;font-weight:600;font-size:12px;' }, b.key + ' ', h('span', { style: 'color:#888;font-weight:400;font-size:11px;' }, dt)),
+                  h('div', { style: 'color:#9aa;font-size:11px;' }, metaParts.join(' \u00b7 '))
+                ),
+                h('div', { style: 'display:flex;gap:5px;flex:none;' }, restoreBtn, gpxBtn, delBtn)
+              );
+            });
+            backupsListEl.replaceChildren(...nodes);
+          } catch (e) {
+            backupsListEl.replaceChildren(h('div', { class: 'terra-dd-error' }, 'Failed to list backups: ' + e));
+          }
+        }
+
+        backupsBox.addEventListener('toggle', () => {
+          if (backupsBox.open) refreshBackupsList();
+        });
+
+        ddSection.append(actions, autoRow, backupsBox);
       } catch (e) {
         ddSection.append(h('div', { class: 'terra-dd-path' }, 'data folder feature unavailable'));
       }
@@ -1595,6 +1691,29 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           cur.continue();
         };
         req.onerror = () => reject(req.error || new Error('cursor failed'));
+      });
+    } finally {
+      try { db.close(); } catch {}
+    }
+  }
+
+  async function restoreKeyvalRide(key, value) {
+    if (typeof indexedDB === 'undefined') throw new Error('IndexedDB unavailable');
+    const db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open('keyval-store');
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        if (!d.objectStoreNames.contains('keyval')) d.createObjectStore('keyval');
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('open keyval-store failed'));
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction('keyval', 'readwrite');
+        tx.objectStore('keyval').put(value, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error('write failed'));
       });
     } finally {
       try { db.close(); } catch {}
