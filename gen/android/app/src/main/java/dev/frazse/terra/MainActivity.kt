@@ -9,13 +9,16 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Point
 import android.graphics.Rect
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.net.http.SslError
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.os.PowerManager
@@ -23,7 +26,9 @@ import android.os.Process
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.Settings
+import android.util.DisplayMetrics
 import android.util.Rational
+import android.view.Display
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -74,6 +79,9 @@ class MainActivity : TauriActivity() {
     private const val PREF_PIP_AUTO_ENTER = "pip_auto_enter"
     private const val PREF_PIP_HUD_MODE = "pip_hud_mode"
     private const val PREF_PIP_SHOW_BUTTON = "pip_show_button"
+    private const val PREF_DUAL_ENABLED = "dual_enabled"
+    private const val PREF_DUAL_MODE = "dual_mode"
+    private const val PREF_DUAL_KEEP_NAMEPLATES = "dual_keep_nameplates"
 
     @Keep
     @JvmStatic
@@ -149,6 +157,63 @@ class MainActivity : TauriActivity() {
       }
       latch.await(1500, TimeUnit.MILLISECONDS)
       return entered
+    }
+
+    @Keep
+    @JvmStatic
+    fun getDualScreenStatusJson(): String {
+      val act = instance ?: return org.json.JSONObject().put("supported", false).toString()
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        return act.buildDualStatusJson()
+      }
+      var result = act.buildDualStatusJson()
+      val latch = CountDownLatch(1)
+      act.runOnUiThread {
+        try {
+          result = act.buildDualStatusJson()
+        } finally {
+          latch.countDown()
+        }
+      }
+      latch.await(1000, TimeUnit.MILLISECONDS)
+      return result
+    }
+
+    @Keep
+    @JvmStatic
+    fun configureDualScreen(
+      enabled: Boolean,
+      mode: String,
+      keepNameplates: Boolean,
+      inRide: Boolean
+    ): String {
+      val act = instance ?: return org.json.JSONObject().put("supported", false).toString()
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        act.applyDualConfig(enabled, mode, keepNameplates, inRide)
+        return act.buildDualStatusJson()
+      }
+      var result = act.buildDualStatusJson()
+      val latch = CountDownLatch(1)
+      act.runOnUiThread {
+        try {
+          act.applyDualConfig(enabled, mode, keepNameplates, inRide)
+          result = act.buildDualStatusJson()
+        } finally {
+          latch.countDown()
+        }
+      }
+      latch.await(1500, TimeUnit.MILLISECONDS)
+      return result
+    }
+
+    @Keep
+    @JvmStatic
+    fun pushDualScreenPayload(payload: String): Boolean {
+      val act = instance ?: return false
+      act.runOnUiThread {
+        act.dualPresentation?.pushPayload(payload)
+      }
+      return true
     }
 
     @Keep
@@ -308,7 +373,39 @@ class MainActivity : TauriActivity() {
   private var pipAutoEnter = true
   private var pipHudMode = "compact"
   private var pipShowButton = false
+  private var dualEnabled = true
+  private var dualMode = "cockpit"
+  private var dualKeepNameplates = true
+  private var dualPresentation: DualScreenPresentation? = null
+  private var dualDisplayId: Int = Display.INVALID_DISPLAY
+  private var displayManager: DisplayManager? = null
+  private val displayListener = object : DisplayManager.DisplayListener {
+    override fun onDisplayAdded(displayId: Int) {
+      runOnUiThread {
+        syncDualScreenPresentation()
+        dispatchDualStateToWebView()
+      }
+    }
+
+    override fun onDisplayChanged(displayId: Int) {
+      runOnUiThread {
+        syncDualScreenPresentation()
+        dispatchDualStateToWebView()
+      }
+    }
+
+    override fun onDisplayRemoved(displayId: Int) {
+      runOnUiThread {
+        if (displayId == dualDisplayId) {
+          dismissDualPresentation()
+        }
+        syncDualScreenPresentation()
+        dispatchDualStateToWebView()
+      }
+    }
+  }
   private var inRideRoute = false
+  private var activityResumed = false
   private var pendingPipEnter = false
   private var suppressAutoPipUntilMs = 0L
   private var dataDirLauncher: ActivityResultLauncher<Uri?>? = null
@@ -326,6 +423,9 @@ class MainActivity : TauriActivity() {
     super.onCreate(savedInstanceState)
 
     loadPipPrefs()
+    loadDualPrefs()
+    displayManager = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+    displayManager?.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
 
     dataDirLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
       handleDataDirPicked(uri)
@@ -374,9 +474,12 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
+    activityResumed = true
     pendingPipEnter = false
     suppressAutoPipUntilMs = 0L
     updatePictureInPictureParams()
+    syncDualScreenPresentation()
+    dispatchDualStateToWebView()
   }
 
   override fun onPause() {
@@ -398,7 +501,9 @@ class MainActivity : TauriActivity() {
 
   override fun onStop() {
     super.onStop()
+    activityResumed = false
     pendingPipEnter = false
+    dismissDualPresentation()
     val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode
     if (!inPip) {
       findWebView(window.decorView)?.onPause()
@@ -446,9 +551,15 @@ class MainActivity : TauriActivity() {
       toggleFullscreen(isFullscreen)
     }
     dispatchPipStateToWebView(isInPictureInPictureMode)
+    syncDualScreenPresentation()
+    dispatchDualStateToWebView()
   }
 
   override fun onDestroy() {
+    dismissDualPresentation()
+    try {
+      displayManager?.unregisterDisplayListener(displayListener)
+    } catch (_: Exception) {}
     TerraBleService.stop(this)
     try {
       CookieManager.getInstance().flush()
@@ -707,6 +818,7 @@ class MainActivity : TauriActivity() {
       .putBoolean(PREF_PIP_SHOW_BUTTON, pipShowButton)
       .apply()
     updatePictureInPictureParams()
+    syncDualScreenPresentation()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) {
       dispatchPipStateToWebView(true)
     }
@@ -792,6 +904,179 @@ class MainActivity : TauriActivity() {
     if (next != inRideRoute) {
       inRideRoute = next
       updatePictureInPictureParams()
+      syncDualScreenPresentation()
+      dispatchDualStateToWebView()
+    }
+  }
+
+  // ─── Dual-Screen (Secondary Display Presentation) ──────────────────────────
+
+  private fun loadDualPrefs() {
+    val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+    dualEnabled = prefs.getBoolean(PREF_DUAL_ENABLED, true)
+    dualMode = when (prefs.getString(PREF_DUAL_MODE, "cockpit")) {
+      "mirror" -> "mirror"
+      else -> "cockpit"
+    }
+    dualKeepNameplates = prefs.getBoolean(PREF_DUAL_KEEP_NAMEPLATES, true)
+  }
+
+  private fun findSecondaryDisplay(): Display? {
+    val dm = displayManager ?: (getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager) ?: return null
+    val pres = try {
+      dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
+    } catch (_: Exception) {
+      emptyArray()
+    }
+    pres.firstOrNull {
+      it.displayId != Display.DEFAULT_DISPLAY && it.isValid && it.state != Display.STATE_OFF
+    }?.let { return it }
+
+    return dm.displays.firstOrNull {
+      it.displayId != Display.DEFAULT_DISPLAY && it.isValid && it.state != Display.STATE_OFF
+    }
+  }
+
+  private fun readDisplaySize(display: Display): Pair<Int, Int> {
+    return try {
+      val ctx = createDisplayContext(display)
+      val dm = ctx.resources.displayMetrics
+      if (dm.widthPixels > 0 && dm.heightPixels > 0) {
+        Pair(dm.widthPixels, dm.heightPixels)
+      } else {
+        val pt = Point()
+        @Suppress("DEPRECATION")
+        display.getRealSize(pt)
+        Pair(pt.x, pt.y)
+      }
+    } catch (_: Exception) {
+      Pair(0, 0)
+    }
+  }
+
+  private fun isDualScreenActiveNow(secondary: Display? = findSecondaryDisplay()): Boolean {
+    val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode
+    return secondary != null && dualEnabled && inRideRoute && activityResumed && !inPip && !pendingPipEnter
+  }
+
+  private fun applyDualConfig(
+    enabled: Boolean,
+    mode: String,
+    keepNameplates: Boolean,
+    inRide: Boolean
+  ) {
+    dualEnabled = enabled
+    dualMode = if (mode == "mirror") "mirror" else "cockpit"
+    dualKeepNameplates = keepNameplates
+    inRideRoute = inRide
+    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+      .putBoolean(PREF_DUAL_ENABLED, dualEnabled)
+      .putString(PREF_DUAL_MODE, dualMode)
+      .putBoolean(PREF_DUAL_KEEP_NAMEPLATES, dualKeepNameplates)
+      .apply()
+    updatePictureInPictureParams()
+    syncDualScreenPresentation()
+    dispatchDualStateToWebView()
+  }
+
+  private fun buildDualStatusJson(): String {
+    val sec = findSecondaryDisplay()
+    val (w, h) = if (sec != null) readDisplaySize(sec) else Pair(0, 0)
+    val active = isDualScreenActiveNow(sec) && dualPresentation != null
+    return org.json.JSONObject()
+      .put("supported", true)
+      .put("hasSecondaryDisplay", sec != null)
+      .put("displayId", sec?.displayId ?: Display.INVALID_DISPLAY)
+      .put("displayName", sec?.name ?: "")
+      .put("displayWidth", w)
+      .put("displayHeight", h)
+      .put("enabled", dualEnabled)
+      .put("mode", dualMode)
+      .put("keepNameplates", dualKeepNameplates)
+      .put("inRide", inRideRoute)
+      .put("active", active)
+      .toString()
+  }
+
+  private fun dismissDualPresentation() {
+    val pres = dualPresentation ?: return
+    dualPresentation = null
+    dualDisplayId = Display.INVALID_DISPLAY
+    try {
+      if (pres.isShowing) pres.dismiss()
+    } catch (_: Exception) {}
+  }
+
+  private fun syncDualScreenPresentation() {
+    if (isFinishing || isDestroyed) {
+      dismissDualPresentation()
+      return
+    }
+    val sec = findSecondaryDisplay()
+    if (!isDualScreenActiveNow(sec) || sec == null) {
+      dismissDualPresentation()
+      return
+    }
+    if (dualPresentation != null && dualDisplayId == sec.displayId && dualPresentation?.isShowing == true) {
+      dualPresentation?.updateState(buildDualStatusJson())
+      return
+    }
+    dismissDualPresentation()
+    try {
+      val pres = DualScreenPresentation(
+        this,
+        sec,
+        onAction = { json -> handleDualScreenAction(json) },
+        onPageReady = {
+          runOnUiThread {
+            dualPresentation?.updateState(buildDualStatusJson())
+            dispatchDualStateToWebView()
+          }
+        }
+      )
+      pres.show()
+      dualPresentation = pres
+      dualDisplayId = sec.displayId
+      pres.updateState(buildDualStatusJson())
+      android.util.Log.i("Terra", "DualScreenPresentation active on display ${sec.displayId} (${sec.name})")
+    } catch (e: Exception) {
+      android.util.Log.w("Terra", "Failed to show DualScreenPresentation: ${e.message}")
+      dismissDualPresentation()
+    }
+  }
+
+  private fun handleDualScreenAction(actionJson: String) {
+    runOnUiThread {
+      try {
+        val obj = org.json.JSONObject(actionJson)
+        if (obj.optString("type") == "setMode") {
+          val nextMode = if (obj.optString("mode") == "mirror") "mirror" else "cockpit"
+          applyDualConfig(dualEnabled, nextMode, dualKeepNameplates, inRideRoute)
+          return@runOnUiThread
+        }
+      } catch (_: Exception) {}
+
+      val wv = findWebView(window.decorView) ?: return@runOnUiThread
+      val quoted = org.json.JSONObject.quote(actionJson)
+      wv.post {
+        try {
+          wv.evaluateJavascript(
+            "window.__terraDualAction && window.__terraDualAction(JSON.parse($quoted));",
+            null
+          )
+        } catch (_: Exception) {}
+      }
+    }
+  }
+
+  private fun dispatchDualStateToWebView() {
+    val wv = findWebView(window.decorView) ?: return
+    val statusQuoted = org.json.JSONObject.quote(buildDualStatusJson())
+    val js = "window.__terraSetDualScreenState && window.__terraSetDualScreenState(JSON.parse($statusQuoted));"
+    wv.post {
+      try {
+        wv.evaluateJavascript(js, null)
+      } catch (_: Exception) {}
     }
   }
 
@@ -832,11 +1117,20 @@ class MainActivity : TauriActivity() {
 
   private fun clearBtAppChunkCacheOnce(webView: WebView) {
     val prefs = getSharedPreferences("terra_prefs", MODE_PRIVATE)
-    if (!prefs.getBoolean("btapp_cache_cleared_v2", false)) {
+    val needBtAppClear = !prefs.getBoolean("btapp_cache_cleared_v2", false)
+    val needCssCompatClear = CssCompat.needsColorCompat(this) &&
+      !prefs.getBoolean("css_compat_cache_cleared_v1", false)
+    if (needBtAppClear || needCssCompatClear) {
       try {
         webView.clearCache(true)
-        prefs.edit().putBoolean("btapp_cache_cleared_v2", true).apply()
-        android.util.Log.i("Terra", "Cleared WebView cache for window.btApp chunk hook")
+        prefs.edit().apply {
+          if (needBtAppClear) putBoolean("btapp_cache_cleared_v2", true)
+          if (needCssCompatClear) putBoolean("css_compat_cache_cleared_v1", true)
+        }.apply()
+        android.util.Log.i(
+          "Terra",
+          "Cleared WebView cache (btApp=$needBtAppClear, cssCompat=$needCssCompatClear, wv=${CssCompat.getWebViewMajorVersion(this)})"
+        )
       } catch (_: Exception) {}
     }
   }
@@ -865,6 +1159,7 @@ class MainActivity : TauriActivity() {
       ): WebResourceResponse? {
         delegate.shouldInterceptRequest(view, request)?.let { return it }
         interceptBiketerraChunk(request)?.let { return it }
+        CssCompat.interceptCssIfNeeded(this@MainActivity, request)?.let { return it }
         return null
       }
 
@@ -882,6 +1177,7 @@ class MainActivity : TauriActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) {
           dispatchPipStateToWebView(true)
         }
+        dispatchDualStateToWebView()
       }
 
       override fun onPageCommitVisible(view: WebView, url: String) {
@@ -1129,9 +1425,16 @@ class MainActivity : TauriActivity() {
         delegate?.onShowFileChooser(webView, filePathCallback, fileChooserParams)
           ?: super.onShowFileChooser(webView, filePathCallback, fileChooserParams)
 
-      override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean =
-        delegate?.onConsoleMessage(consoleMessage)
+      override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+        if (consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+          android.util.Log.e(
+            "TerraWeb",
+            "${consoleMessage.message()} (${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})"
+          )
+        }
+        return delegate?.onConsoleMessage(consoleMessage)
           ?: super.onConsoleMessage(consoleMessage)
+      }
 
       override fun onReceivedTitle(view: WebView, title: String) {
         if (delegate != null) delegate.onReceivedTitle(view, title)

@@ -507,6 +507,24 @@
           "markdownDescription": "Enables the terra_dismiss_data_dir_prompt command without any pre-configured scope."
         },
         {
+          "description": "Enables the terra_dualscreen_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-dualscreen-configure",
+          "markdownDescription": "Enables the terra_dualscreen_configure command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_dualscreen_push command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-dualscreen-push",
+          "markdownDescription": "Enables the terra_dualscreen_push command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_dualscreen_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-dualscreen-status",
+          "markdownDescription": "Enables the terra_dualscreen_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the terra_enter_pip command without any pre-configured scope.",
           "type": "string",
           "const": "allow-terra-enter-pip",
@@ -889,6 +907,24 @@
           "type": "string",
           "const": "deny-terra-dismiss-data-dir-prompt",
           "markdownDescription": "Denies the terra_dismiss_data_dir_prompt command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_dualscreen_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-dualscreen-configure",
+          "markdownDescription": "Denies the terra_dualscreen_configure command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_dualscreen_push command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-dualscreen-push",
+          "markdownDescription": "Denies the terra_dualscreen_push command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_dualscreen_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-dualscreen-status",
+          "markdownDescription": "Denies the terra_dualscreen_status command without any pre-configured scope."
         },
         {
           "description": "Denies the terra_enter_pip command without any pre-configured scope.",

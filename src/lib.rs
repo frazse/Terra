@@ -4,6 +4,7 @@ mod discord;
 mod perf;
 mod ride;
 pub mod android_data_dir;
+pub mod android_dualscreen;
 pub mod android_pip;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]

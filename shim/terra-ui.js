@@ -1140,6 +1140,17 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           pipSummaryBadge)),
       pipBody);
 
+    // Dual-Screen (Secondary Display) section (Android only)
+    const dualSummaryBadge = h('span', { class: 'terra-ver' }, '');
+    const dualBody = h('div', { class: 'terra-fg-body' });
+    const dualBox = h('details', { class: 'terra-ble terra-dual-panel', hidden: '' },
+      h('summary', {},
+        h('span', { class: 'terra-panel-title' },
+          h('span', { class: 'terra-caret', 'aria-hidden': 'true' }, '\u25b8'),
+          h('span', { class: 'terra-panel-label' }, 'Dual-Screen HUD (2nd Display)'),
+          dualSummaryBadge)),
+      dualBody);
+
     // Data folder section (collapsed by default)
     const ddSummaryBadge = h('span', { class: 'terra-ver terra-dd-summary-path' }, '');
     const ddSection = h('div', { class: 'terra-datadir' });
@@ -1151,7 +1162,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           ddSummaryBadge)),
       ddSection);
 
-    const panelsBox = h('div', { class: 'terra-panels' }, bleBox, fgBox, pipBox, ddBox);
+    const panelsBox = h('div', { class: 'terra-panels' }, bleBox, fgBox, pipBox, dualBox, ddBox);
     const mainBox = h('div', { class: 'terra-main' }, addonsBox, panelsBox);
 
     foot = h('div', { class: 'terra-foot' },
@@ -1438,6 +1449,104 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           renderPip(st);
         } catch {
           /* Ignore on hosts without Android PiP */
+        }
+      })();
+
+      // Populate Dual-Screen HUD panel on Android
+      (async () => {
+        const dualApi = window.__terraDualScreen;
+        if (!dualApi) return;
+
+        const modeLabels = {
+          cockpit: 'Cockpit Dashboard (Custom)',
+          mirror: 'Live HUD Mirror (Biketerra + Addons)',
+        };
+
+        const renderDual = (st) => {
+          if (!st || !st.supported) return;
+          dualBox.hidden = false;
+          if (!st.hasSecondaryDisplay) {
+            dualSummaryBadge.textContent = 'No 2nd display';
+          } else if (!st.enabled) {
+            dualSummaryBadge.textContent = 'Off';
+          } else {
+            const modeShort = st.mode === 'mirror' ? 'Mirror' : 'Cockpit';
+            const dims = (st.displayWidth && st.displayHeight)
+              ? `${st.displayWidth}\u00d7${st.displayHeight}`
+              : '2nd screen';
+            dualSummaryBadge.textContent = `${modeShort} \u00b7 ${dims}`;
+          }
+
+          const saveFeedback = h('span', { class: 'terra-status terra-dual-saved' });
+          const saveDual = async (patch) => {
+            try {
+              const next = await dualApi.saveConfig(patch);
+              renderDual(next);
+              const fb = dualBody.querySelector('.terra-dual-saved');
+              if (fb) {
+                fb.textContent = 'saved';
+                setTimeout(() => { fb.textContent = ''; }, 2000);
+              }
+            } catch (e) {
+              showBanner('Dual-Screen save failed: ' + e, 'err');
+            }
+          };
+
+          const enabledChk = h('input', { type: 'checkbox' });
+          enabledChk.checked = st.enabled !== false;
+          enabledChk.addEventListener('change', () => saveDual({ enabled: enabledChk.checked }));
+
+          const modeSelect = h('select', { class: 'terra-input' });
+          for (const [val, label] of Object.entries(modeLabels)) {
+            modeSelect.append(h('option', { value: val }, label));
+          }
+          modeSelect.value = st.mode === 'mirror' ? 'mirror' : 'cockpit';
+          modeSelect.addEventListener('change', () => saveDual({ mode: modeSelect.value }));
+
+          const npChk = h('input', { type: 'checkbox' });
+          npChk.checked = st.keepNameplates !== false;
+          npChk.addEventListener('change', () => saveDual({ keepNameplates: npChk.checked }));
+
+          const dispInfo = st.hasSecondaryDisplay
+            ? `${st.displayName || 'Secondary display'} (${st.displayWidth}\u00d7${st.displayHeight})`
+            : 'No secondary display detected';
+          const statusTxt = !st.hasSecondaryDisplay
+            ? dispInfo
+            : !st.enabled
+              ? `${dispInfo} \u00b7 Disabled`
+              : st.active
+                ? `${dispInfo} \u00b7 Active on this ride`
+                : `${dispInfo} \u00b7 Armed for /ride & /spectate`;
+
+          dualBody.replaceChildren(
+            h('div', { class: 'terra-fg-status' },
+              h('span', { class: 'terra-dot' + (st.hasSecondaryDisplay && st.enabled ? ' on' : '') }),
+              h('span', {}, statusTxt),
+              saveFeedback),
+            h('label', { class: 'terra-fg-check' },
+              enabledChk,
+              h('span', {}, 'Move ride UI to 2nd screen during rides')),
+            h('div', { class: 'terra-field', style: 'margin-top:0' },
+              h('label', {}, 'Secondary screen layout'),
+              modeSelect,
+              h('div', { class: 'terra-help' },
+                'You can also switch between Cockpit and Mirror anytime from the top bar on the 2nd screen.')),
+            h('label', { class: 'terra-fg-check' },
+              npChk,
+              h('span', {}, 'Keep rider nameplates visible on main screen'))
+          );
+        };
+
+        try {
+          const st = await dualApi.syncStatus();
+          renderDual(st);
+          if (st && st.hasSecondaryDisplay) dualBox.open = true;
+          const off = core.bus.on('terra:dualscreen-changed', (next) => {
+            if (!overlay) { off(); return; }
+            renderDual(next);
+          });
+        } catch {
+          /* Ignore on hosts without Dual-Screen support */
         }
       })();
     }

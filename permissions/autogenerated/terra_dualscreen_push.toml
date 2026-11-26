@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-dualscreen-push"
+description = "Enables the terra_dualscreen_push command without any pre-configured scope."
+commands.allow = ["terra_dualscreen_push"]
+
+[[permission]]
+identifier = "deny-terra-dualscreen-push"
+description = "Denies the terra_dualscreen_push command without any pre-configured scope."
+commands.deny = ["terra_dualscreen_push"]

@@ -71,6 +71,9 @@
     "allow-terra-delete-ride-backup",
     "allow-terra-pip-status",
     "allow-terra-pip-configure",
-    "allow-terra-enter-pip"
+    "allow-terra-enter-pip",
+    "allow-terra-dualscreen-status",
+    "allow-terra-dualscreen-configure",
+    "allow-terra-dualscreen-push"
   ]
 }

@@ -5,6 +5,8 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 const SHIM: &str = include_str!("../shim/bluetooth-shim.js");
 const LOADER: &str = include_str!("../shim/addons-loader.js");
 const UI: &str = include_str!("../shim/terra-ui.js");
+#[cfg(target_os = "android")]
+const DUALSCREEN: &str = include_str!("../shim/dualscreen.js");
 
 #[tauri::command]
 fn shim_log(kind: String, detail: serde_json::Value) {
@@ -79,6 +81,9 @@ pub fn run() {
             crate::android_pip::terra_pip_status,
             crate::android_pip::terra_pip_configure,
             crate::android_pip::terra_enter_pip,
+            crate::android_dualscreen::terra_dualscreen_status,
+            crate::android_dualscreen::terra_dualscreen_configure,
+            crate::android_dualscreen::terra_dualscreen_push,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -139,6 +144,9 @@ pub fn run() {
                 );
                 #[cfg(not(target_os = "android"))]
                 let boot_prefix = format!("window.__terraRememberedIds = {ids_json};");
+                #[cfg(target_os = "android")]
+                let init = format!("{boot_prefix}\n;\n{SHIM}\n;\n{LOADER}\n;\n{UI}\n;\n{DUALSCREEN}");
+                #[cfg(not(target_os = "android"))]
                 let init = format!("{boot_prefix}\n;\n{SHIM}\n;\n{LOADER}\n;\n{UI}");
                 WebviewWindowBuilder::new(
                     app,

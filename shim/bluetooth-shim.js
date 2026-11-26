@@ -1,3 +1,103 @@
+// ES2023+ polyfills for older WebViews (e.g. Chromium 109 on Android 13 where
+// Array.prototype.toSorted/toReversed/with shipped in Chromium 110).
+(() => {
+  const def = (proto, name, fn) => {
+    if (proto && !(name in proto)) {
+      Object.defineProperty(proto, name, {
+        value: fn,
+        writable: true,
+        configurable: true,
+      });
+    }
+  };
+  def(Array.prototype, 'toSorted', function (compareFn) {
+    return Array.from(this).sort(compareFn);
+  });
+  def(Array.prototype, 'toReversed', function () {
+    return Array.from(this).reverse();
+  });
+  def(Array.prototype, 'toSpliced', function (start, deleteCount, ...items) {
+    const copy = Array.from(this);
+    if (arguments.length === 0) return copy;
+    if (arguments.length === 1) copy.splice(start);
+    else copy.splice(start, deleteCount, ...items);
+    return copy;
+  });
+  def(Array.prototype, 'with', function (index, value) {
+    const len = this.length >>> 0;
+    let idx = Math.trunc(Number(index)) || 0;
+    if (idx < 0) idx += len;
+    if (idx < 0 || idx >= len) throw new RangeError('Invalid index');
+    const copy = Array.from(this);
+    copy[idx] = value;
+    return copy;
+  });
+  const TypedArrayProto = Object.getPrototypeOf(Int8Array.prototype);
+  def(TypedArrayProto, 'toSorted', function (compareFn) {
+    return new this.constructor(this).sort(compareFn);
+  });
+  def(TypedArrayProto, 'toReversed', function () {
+    return new this.constructor(this).reverse();
+  });
+  def(TypedArrayProto, 'with', function (index, value) {
+    const len = this.length >>> 0;
+    let idx = Math.trunc(Number(index)) || 0;
+    if (idx < 0) idx += len;
+    if (idx < 0 || idx >= len) throw new RangeError('Invalid index');
+    const copy = new this.constructor(this);
+    copy[idx] = value;
+    return copy;
+  });
+  if (typeof Promise.withResolvers !== 'function') {
+    Promise.withResolvers = function () {
+      let resolve, reject;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
+  }
+  if (typeof Object.groupBy !== 'function') {
+    Object.groupBy = function (items, callbackFn) {
+      const obj = Object.create(null);
+      let i = 0;
+      for (const item of items) {
+        const key = callbackFn(item, i++);
+        if (key in obj) obj[key].push(item);
+        else obj[key] = [item];
+      }
+      return obj;
+    };
+  }
+  if (typeof Map.groupBy !== 'function') {
+    Map.groupBy = function (items, callbackFn) {
+      const map = new Map();
+      let i = 0;
+      for (const item of items) {
+        const key = callbackFn(item, i++);
+        let list = map.get(key);
+        if (!list) {
+          list = [];
+          map.set(key, list);
+        }
+        list.push(item);
+      }
+      return map;
+    };
+  }
+  if (typeof URL.canParse !== 'function') {
+    URL.canParse = function (url, base) {
+      try {
+        new URL(url, base);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+  }
+})();
+
 // Web Bluetooth shim backed by Terra's Rust BLE broker (btleplug).
 (() => {
   if (window.__terraBtShim) return;

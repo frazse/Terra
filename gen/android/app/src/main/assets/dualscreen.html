@@ -1,0 +1,1555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Terra Dual Screen</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --card: #141923;
+    --card-border: #232b3a;
+    --muted: #8b95a8;
+    --text: #f3f6fc;
+    --accent: #ff6b57;
+    --green: #22c55e;
+    --blue: #3b82f6;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #a855f7;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    overflow: hidden !important;
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    font-size: 16px !important;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #dual-shell {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+  }
+  /* ── Top bar ── */
+  #dual-topbar {
+    flex: none;
+    height: 34px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background: #10141d;
+    border-bottom: 1px solid var(--card-border);
+    z-index: 50;
+  }
+  .tb-left, .tb-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .tb-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    flex: none;
+  }
+  .tb-dot.paused { background: var(--amber); }
+  .tb-timer {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    color: #fff;
+  }
+  .tb-pill {
+    font-size: 10px;
+    font-weight: 600;
+    color: #b7c2d6;
+    background: #1b2230;
+    border: 1px solid #2a3447;
+    border-radius: 999px;
+    padding: 2px 7px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+  }
+  .tb-seg {
+    display: inline-flex;
+    background: #181e2a;
+    border: 1px solid #2b3548;
+    border-radius: 7px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .tb-seg button {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .tb-seg button.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .tb-icon-btn {
+    border: 1px solid #2b3548;
+    background: #181e2a;
+    color: #d6deed;
+    border-radius: 7px;
+    height: 24px;
+    min-width: 26px;
+    padding: 0 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tb-icon-btn:active { background: #263044; }
+
+  /* ── Mode containers ── */
+  #cockpit-view, #mirror-view {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  #cockpit-view[hidden], #mirror-view[hidden] { display: none !important; }
+
+  /* ── Cockpit Mode (1240x1080 -> ~551x446 CSS px) ── */
+  #cockpit-view {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 7px;
+    overflow: hidden;
+  }
+  .ck-hero-row {
+    display: grid;
+    grid-template-columns: 1.35fr 1fr 1fr 1fr;
+    gap: 6px;
+    flex: none;
+  }
+  .ck-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-width: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .ck-card::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--accent-bar, transparent);
+  }
+  .ck-lbl {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+  }
+  .ck-val-row {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    margin: 2px 0;
+  }
+  .ck-val {
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    font-size: 26px;
+    line-height: 1.05;
+    color: #fff;
+  }
+  .ck-hero-power .ck-val { font-size: 32px; }
+  .ck-unit {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .ck-sub {
+    font-size: 10px;
+    color: #a3aec2;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ck-strip-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    flex: none;
+  }
+  .ck-mini-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 9px;
+    padding: 5px 8px;
+    min-width: 0;
+  }
+  .ck-mini-val {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    font-size: 15px;
+    color: #f8fafc;
+    line-height: 1.15;
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ck-mini-sub {
+    font-size: 9.5px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ck-visual-row {
+    display: grid;
+    grid-template-columns: 1.08fr 1fr;
+    gap: 6px;
+    flex: 1;
+    min-height: 105px;
+  }
+  .ck-vis-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .ck-vis-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    margin-bottom: 4px;
+    flex: none;
+  }
+  .ck-vis-btns {
+    display: flex;
+    gap: 4px;
+  }
+  .ck-chip-btn {
+    border: 1px solid #2b3548;
+    background: #1b2230;
+    color: #cbd5e1;
+    border-radius: 6px;
+    padding: 2px 6px;
+    font: inherit;
+    font-size: 9.5px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .ck-chip-btn:active { background: #2c384e; }
+  .ck-map-wrap {
+    flex: 1;
+    min-height: 0;
+    border-radius: 7px;
+    background: #0d1118;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  #ck-map-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .ck-map-empty {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .ck-elev-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .ck-elev-svg-box {
+    flex: 1;
+    min-height: 54px;
+    border-radius: 7px;
+    background: #0d1118;
+    border: 1px solid #1e2636;
+    position: relative;
+    overflow: hidden;
+  }
+  .ck-elev-svg-box svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .ck-elev-svg-box svg path {
+    fill: rgba(59, 130, 246, 0.34);
+    stroke: #60a5fa;
+    stroke-width: 0.012;
+  }
+  .ck-elev-cursor {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ff6b57;
+    box-shadow: 0 0 6px rgba(255, 107, 87, 0.9);
+    pointer-events: none;
+  }
+  .ck-climb-banner, .ck-workout-banner {
+    flex: none;
+    background: #18202e;
+    border: 1px solid #29354a;
+    border-radius: 7px;
+    padding: 4px 7px;
+    font-size: 10.5px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .ck-climb-name {
+    font-weight: 700;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ck-climb-meta {
+    font-variant-numeric: tabular-nums;
+    color: #93c5fd;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .ck-riders-row {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    overflow-x: auto;
+    padding: 1px 0;
+  }
+  .ck-rider-chip {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 7px;
+    border-radius: 7px;
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .ck-rider-chip.me {
+    border-color: var(--accent);
+    background: rgba(255, 107, 87, 0.12);
+  }
+  .ck-rider-pos { color: #94a3b8; font-weight: 700; }
+  .ck-rider-chip.me .ck-rider-pos { color: #fca5a5; }
+  .ck-rider-gap { color: var(--muted); font-weight: 600; }
+  .ck-rider-name { font-weight: 700; color: #f1f5f9; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ck-rider-stat { color: #86efac; font-weight: 700; }
+
+  .ck-actions-row {
+    flex: none;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 5px;
+  }
+  .ck-act-btn {
+    height: 36px;
+    border: 1px solid #2b3548;
+    background: #171d29;
+    color: #e2e8f0;
+    border-radius: 9px;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    padding: 0 4px;
+  }
+  .ck-act-btn:active { background: #263147; transform: scale(0.98); }
+  .ck-act-btn.primary { background: #1e3a2f; border-color: #2f6b4f; color: #86efac; }
+  .ck-act-btn.paused { background: #3b2416; border-color: #7c441e; color: #fdba74; }
+
+  /* Cockpit overlay drawer when .ride-menu or .panel-chat opens */
+  #ck-popup-sheet {
+    position: absolute;
+    inset: 6px;
+    background: rgba(11, 14, 20, 0.96);
+    border: 1px solid #334155;
+    border-radius: 12px;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #ck-popup-sheet[hidden] { display: none !important; }
+  .ck-popup-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: #151b26;
+    border-bottom: 1px solid #283244;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  #ck-popup-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px;
+    position: relative;
+  }
+
+  /* ── Mirror Mode (Biketerra HUD + Addons on 1240x1080) ── */
+  #mirror-view {
+    background: var(--bg);
+    overflow: hidden;
+    position: relative;
+  }
+  #mir-hud, #mir-addons, #mir-menu, #mir-modal {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  #mir-hud:empty, #mir-addons:empty, #mir-menu:empty, #mir-modal:empty {
+    display: none;
+  }
+  #mir-hud *, #mir-addons *, #mir-menu *, #mir-modal * {
+    pointer-events: auto;
+  }
+
+  /* Reflow Biketerra's 3-col HUD into a clean 2-col full-screen layout for 1240x1080 */
+  #mirror-view .hidden {
+    display: none !important;
+  }
+  #mirror-view .hud {
+    position: relative !important;
+    inset: auto !important;
+    width: 100% !important;
+    height: 100% !important;
+    display: grid !important;
+    grid-template-columns: minmax(195px, 41%) 1fr !important;
+    grid-template-rows: auto 1fr auto auto !important;
+    grid-template-areas:
+      "effort time"
+      "effort people"
+      "effort place"
+      "road road" !important;
+    gap: 5px !important;
+    padding: 5px !important;
+    overflow: hidden !important;
+    pointer-events: auto !important;
+  }
+  #mirror-view .hud > .zone-time {
+    grid-area: time !important;
+    width: 100% !important;
+    height: auto !important;
+    justify-content: flex-end !important;
+    align-items: flex-end !important;
+  }
+  #mirror-view .zone-effort {
+    grid-area: effort !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: flex-start !important;
+  }
+  #mirror-view .zone-effort .effort-stack {
+    width: 100% !important;
+    gap: 3px !important;
+  }
+  #mirror-view .zone-effort .panel:not(.hidden) {
+    padding: 3px 6px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 3px !important;
+  }
+  #mirror-view .zone-effort .stats-grid {
+    order: 1 !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 3px !important;
+    padding: 1px 0 !important;
+  }
+  #mirror-view .zone-effort .stat-cell {
+    width: auto !important;
+    min-width: 0 !important;
+  }
+  #mirror-view .zone-effort .stat-cell:not(:has(canvas.terra-dark-graph)) {
+    height: auto !important;
+    min-height: 0 !important;
+    font-size: 12px !important;
+  }
+  #mirror-view .zone-effort .stat-cell:not(:has(canvas.terra-dark-graph)) .stat-value {
+    font-size: 15px !important;
+    line-height: 1.05 !important;
+  }
+  #mirror-view .zone-effort .stat-cell.large:not(:has(canvas.terra-dark-graph)) .stat-value {
+    font-size: 25px !important;
+    line-height: 1.05 !important;
+  }
+  #mirror-view .zone-effort .stat-cell:not(:has(canvas.terra-dark-graph)) .stat-unit,
+  #mirror-view .zone-effort .stat-cell:not(:has(canvas.terra-dark-graph)) .stat-companion {
+    font-size: 11px !important;
+  }
+  #mirror-view .zone-effort .stat-cell:has(canvas.terra-dark-graph),
+  #mirror-view .zone-effort .stat-cell.large:has(canvas.terra-dark-graph) {
+    grid-column: 1 / -1 !important;
+    min-height: 46px !important;
+    height: 46px !important;
+  }
+  #mirror-view .zone-effort .stat-cell canvas.terra-dark-graph {
+    width: 100% !important;
+    height: 100% !important;
+    display: block !important;
+  }
+  #mirror-view .zone-effort .action-buttons {
+    order: 2 !important;
+    flex-wrap: nowrap !important;
+    gap: 3px !important;
+    justify-content: space-between !important;
+  }
+  #mirror-view .zone-effort .action-button {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    width: auto !important;
+    height: 26px !important;
+    padding: 0 4px !important;
+  }
+  #mirror-view .zone-effort .mb-1 {
+    order: 3 !important;
+    margin-bottom: 0 !important;
+  }
+  #mirror-view .zone-effort .zones-bar:has(.zone-list) {
+    display: none !important;
+  }
+  #mirror-view .zone-effort .mb-1:has(.zone-list):not(:has(.zones-head)) {
+    display: none !important;
+  }
+  #mirror-view .zone-effort .zones-bar {
+    padding: 2px 0 0 !important;
+  }
+  #mirror-view .zone-effort .zones-bar .zones-head {
+    font-size: 10px !important;
+    line-height: 1.2 !important;
+    margin-bottom: 1px !important;
+  }
+  #mirror-view .zone-effort .zones-bar .bar {
+    height: 7px !important;
+    margin-top: 2px !important;
+  }
+  #mirror-view .zone-effort .zones-bar .zone-list {
+    gap: 1px !important;
+    margin-top: 3px !important;
+    font-size: 9.5px !important;
+    line-height: 1.15 !important;
+  }
+  #mirror-view .zone-effort .zones-bar .zone-list li {
+    grid-template-columns: 7px 1fr auto auto !important;
+    gap: 4px !important;
+    font-size: 9.5px !important;
+    line-height: 1.15 !important;
+    align-items: center !important;
+  }
+  #mirror-view .zone-effort .zones-bar .zone-list li i {
+    width: 7px !important;
+    height: 7px !important;
+  }
+  #mirror-view .zone-effort .zones-bar .zone-list li > span {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  #mirror-view .zone-effort .zones-bar .zone-list li .zone-time {
+    grid-area: auto !important;
+    justify-self: end !important;
+    width: auto !important;
+  }
+  #mirror-view .hud .zone-people {
+    grid-area: people !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    align-self: stretch !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+  }
+  #mirror-view .hud .zone-people .people-status {
+    flex: none !important;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+  }
+  #mirror-view .hud .zone-people .rider-list-wrap,
+  #mirror-view .hud .zone-people .riders {
+    width: 100% !important;
+    flex: 1 !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+  #mirror-view .hud .zone-people .riders-main,
+  #mirror-view .hud .zone-people .riders-list {
+    flex: 1 !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+  }
+  #mirror-view .hud .zone-people .riders-main .rider[data-terra-pos] {
+    grid-template-columns: 1.65rem 3.8rem 1.5rem minmax(0, 1fr) 2.8rem !important;
+    gap: 0.35rem !important;
+    padding: 0.25rem 0.45rem !important;
+  }
+  #mirror-view .hud .zone-people .riders-main .rider[data-terra-pos]::before {
+    content: "#" attr(data-terra-pos);
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: rgba(255, 255, 255, 0.55);
+    text-align: right;
+    white-space: nowrap;
+  }
+  #mirror-view .hud .zone-people .riders-main .rider.is-me[data-terra-pos]::before {
+    color: #fca5a5;
+  }
+  #mirror-view .hud .zone-place {
+    grid-area: place !important;
+    width: 100% !important;
+    height: 105px !important;
+    display: flex !important;
+  }
+  #mirror-view .hud .zone-place .minimap-wrap,
+  #mirror-view .hud .zone-place .map-container {
+    width: 100% !important;
+    height: 100% !important;
+  }
+  #mirror-view .hud .zone-place .map-container canvas {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+  }
+  #mirror-view .hud .zone-road {
+    grid-area: road !important;
+    width: 100% !important;
+    height: auto !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 6px !important;
+  }
+  #mirror-view .hud .zone-road .road-row {
+    flex: none !important;
+    width: auto !important;
+    gap: 5px !important;
+  }
+  #mirror-view .hud .zone-road .road-middle {
+    display: none !important;
+  }
+  #mirror-view .hud .zone-road .panel-profile {
+    flex: 1 !important;
+    min-width: 0 !important;
+  }
+
+  /* Addons container inside mirror */
+  #mir-addons {
+    z-index: 20;
+    top: 4px !important;
+    left: 234px !important;
+    right: auto !important;
+    bottom: auto !important;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: 5px;
+    padding: 0;
+    pointer-events: none !important;
+  }
+  #mir-addons > * {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    max-width: 100% !important;
+    pointer-events: auto !important;
+  }
+  /* Ride menu / modals inside mirror or cockpit popup */
+  #mir-menu {
+    z-index: 35;
+  }
+  #mir-modal {
+    position: fixed;
+    inset: 34px 0 0 0;
+    z-index: 48;
+    pointer-events: none;
+  }
+  #mir-modal:empty {
+    display: none;
+  }
+  #mir-modal * {
+    pointer-events: auto;
+  }
+  #mir-menu .menu-backing {
+    position: fixed !important;
+    inset: 34px 0 0 0 !important;
+    background: rgba(11, 14, 20, 0.55) !important;
+    z-index: 1 !important;
+  }
+  #mir-menu .ride-menu {
+    position: fixed !important;
+    top: 38px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100vh - 46px) !important;
+    overflow: auto !important;
+    z-index: 2 !important;
+  }
+  #ck-popup-body .ride-menu,
+  #ck-popup-body .panel-chat {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+  }
+  #ck-popup-body .ride-menu .menu-scroll {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+  }
+  #ck-popup-body .panel-chat .chat-message-list {
+    flex: 1 !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+  }
+  #ck-popup-body .panel-chat .chat-input {
+    width: 100% !important;
+  }
+  #ck-popup-body .menu-backing { display: none !important; }
+  #mir-modal .terra-overlay {
+    position: fixed !important;
+    top: 34px !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+  }
+  #mir-modal .terra-modal {
+    width: calc(100vw - 12px) !important;
+    height: calc(100vh - 42px) !important;
+    max-height: calc(100vh - 42px) !important;
+    border-radius: 10px !important;
+  }
+  #mir-modal .terra-head {
+    padding: 8px 12px !important;
+  }
+  #mir-modal .terra-head h3 {
+    font-size: 15px !important;
+  }
+  #mir-modal .terra-main {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+    padding: 8px 10px !important;
+    gap: 6px !important;
+  }
+  #mir-modal .terra-addons,
+  #mir-modal .terra-addons.open {
+    flex: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+  #mir-modal .terra-addons-content {
+    flex: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    margin-top: 6px !important;
+    padding-top: 6px !important;
+  }
+  #mir-modal .terra-toolbar {
+    padding: 0 0 6px !important;
+    gap: 6px !important;
+  }
+  #mir-modal .terra-search {
+    padding: 5px 8px !important;
+    font-size: 12px !important;
+  }
+  #mir-modal .terra-chip {
+    padding: 2px 8px !important;
+    font-size: 11px !important;
+  }
+  #mir-modal .terra-body {
+    flex: none !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+  #mir-modal .terra-row {
+    padding: 8px 0 !important;
+    gap: 10px !important;
+  }
+  #mir-modal .terra-panels {
+    flex: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  #mir-modal .terra-ble-list,
+  #mir-modal .terra-fg-body {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  #mir-modal .terra-foot {
+    padding: 6px 12px !important;
+    gap: 2px !important;
+    font-size: 11px !important;
+  }
+  #mir-modal .terra-foot-dirs {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    font-size: 10px !important;
+  }
+  #mir-modal .terra-modal.terra-mode-catalog .terra-toolbar {
+    padding: 6px 12px !important;
+  }
+  #mir-modal .terra-modal.terra-mode-catalog .terra-catalog-head {
+    padding: 6px 12px !important;
+  }
+  #mir-modal .terra-modal.terra-mode-catalog .terra-catalog-list {
+    padding: 4px 12px 10px !important;
+  }
+</style>
+<style id="terra-mir-styles"></style>
+<style id="terra-mir-inline-styles"></style>
+</head>
+<body>
+<div id="dual-shell">
+  <div id="dual-topbar">
+    <div class="tb-left">
+      <span class="tb-dot" id="tb-dot"></span>
+      <span class="tb-timer" id="tb-timer">00:00</span>
+      <span class="tb-pill" id="tb-status">Connected</span>
+    </div>
+    <div class="tb-right">
+      <div class="tb-seg" role="tablist" aria-label="Dual-screen mode">
+        <button type="button" id="btn-mode-cockpit" class="active">Cockpit</button>
+        <button type="button" id="btn-mode-mirror">Mirror</button>
+      </div>
+      <button type="button" class="tb-icon-btn" id="btn-top-settings" title="Terra Settings">&#9881;</button>
+    </div>
+  </div>
+
+  <div id="cockpit-view">
+    <div class="ck-hero-row">
+      <div class="ck-card ck-hero-power" id="card-power">
+        <div class="ck-lbl"><span>Power</span><span id="ck-wkg">0.0 W/kg</span></div>
+        <div class="ck-val-row"><span class="ck-val" id="ck-pwr">--</span><span class="ck-unit">W</span></div>
+        <div class="ck-sub" id="ck-pwr-sub">0 avg</div>
+      </div>
+      <div class="ck-card" id="card-hr">
+        <div class="ck-lbl"><span>Heart</span></div>
+        <div class="ck-val-row"><span class="ck-val" id="ck-hr">--</span><span class="ck-unit">bpm</span></div>
+        <div class="ck-sub" id="ck-hr-sub">0 avg</div>
+      </div>
+      <div class="ck-card" id="card-cad">
+        <div class="ck-lbl"><span>Cadence</span></div>
+        <div class="ck-val-row"><span class="ck-val" id="ck-cad">0</span><span class="ck-unit">rpm</span></div>
+        <div class="ck-sub" id="ck-cad-sub">0 avg</div>
+      </div>
+      <div class="ck-card" id="card-spd">
+        <div class="ck-lbl"><span>Speed</span></div>
+        <div class="ck-val-row"><span class="ck-val" id="ck-spd">0.0</span><span class="ck-unit" id="ck-spd-unit">kph</span></div>
+        <div class="ck-sub" id="ck-spd-sub">0.0 avg</div>
+      </div>
+    </div>
+
+    <div class="ck-strip-row">
+      <div class="ck-mini-card">
+        <div class="ck-lbl"><span>Distance</span></div>
+        <div class="ck-mini-val" id="ck-dist">0.00 km</div>
+        <div class="ck-mini-sub" id="ck-dist-sub">-- to go</div>
+      </div>
+      <div class="ck-mini-card">
+        <div class="ck-lbl"><span>Climb</span></div>
+        <div class="ck-mini-val" id="ck-climb">0 m</div>
+        <div class="ck-mini-sub" id="ck-climb-sub">-- to go</div>
+      </div>
+      <div class="ck-mini-card">
+        <div class="ck-lbl"><span>Grade / Draft</span></div>
+        <div class="ck-mini-val" id="ck-grade">0.0%</div>
+        <div class="ck-mini-sub" id="ck-draft">Draft 0 W</div>
+      </div>
+      <div class="ck-mini-card">
+        <div class="ck-lbl"><span id="ck-extra-lbl">Energy / Gear</span></div>
+        <div class="ck-mini-val" id="ck-extra">0 kcal</div>
+        <div class="ck-mini-sub" id="ck-extra-sub">0 /hr</div>
+      </div>
+    </div>
+
+    <div class="ck-visual-row">
+      <div class="ck-vis-card">
+        <div class="ck-vis-head">
+          <span class="ck-lbl">Map</span>
+          <div class="ck-vis-btns">
+            <button type="button" class="ck-chip-btn" id="btn-map-zoom">Zoom</button>
+            <button type="button" class="ck-chip-btn" id="btn-map-compass">N</button>
+          </div>
+        </div>
+        <div class="ck-map-wrap" id="ck-map-wrap">
+          <img id="ck-map-img" alt="Route minimap" hidden>
+          <span class="ck-map-empty" id="ck-map-empty">Waiting for map…</span>
+        </div>
+      </div>
+      <div class="ck-vis-card">
+        <div class="ck-vis-head">
+          <span class="ck-lbl">Elevation</span>
+          <span class="ck-mini-sub" id="ck-elev-pct">0%</span>
+        </div>
+        <div class="ck-elev-wrap">
+          <div class="ck-elev-svg-box" id="ck-elev-box">
+            <div class="ck-elev-cursor" id="ck-elev-cursor" style="left: 0%;"></div>
+          </div>
+          <div class="ck-climb-banner" id="ck-climb-banner" hidden>
+            <span class="ck-climb-name" id="ck-climb-title">Climb</span>
+            <span class="ck-climb-meta" id="ck-climb-meta"></span>
+          </div>
+          <div class="ck-workout-banner" id="ck-workout-banner" hidden>
+            <span class="ck-climb-name" id="ck-wo-title">Workout</span>
+            <span class="ck-climb-meta" id="ck-wo-meta"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ck-riders-row" id="ck-riders-row"></div>
+
+    <div class="ck-actions-row">
+      <button type="button" class="ck-act-btn primary" id="btn-act-start">&#9654; Start</button>
+      <button type="button" class="ck-act-btn" id="btn-act-menu">&#9776; Menu</button>
+      <button type="button" class="ck-act-btn" id="btn-act-cam">&#127909; Cam</button>
+      <button type="button" class="ck-act-btn" id="btn-act-shot">&#128247; Shot</button>
+      <button type="button" class="ck-act-btn" id="btn-act-chat">&#128172; Chat</button>
+      <button type="button" class="ck-act-btn" id="btn-act-gear">&#9881; Terra</button>
+    </div>
+
+    <div id="ck-popup-sheet" hidden>
+      <div class="ck-popup-head">
+        <span id="ck-popup-title">Menu</span>
+        <button type="button" class="ck-chip-btn" id="ck-popup-close">Close</button>
+      </div>
+      <div id="ck-popup-body"></div>
+    </div>
+  </div>
+
+  <div id="mirror-view" hidden>
+    <div id="mir-hud"></div>
+    <div id="mir-addons"></div>
+    <div id="mir-menu"></div>
+  </div>
+  <div id="mir-modal"></div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = {
+    mode: 'cockpit',
+    keepNameplates: true,
+    active: true,
+    lastMenuHash: '',
+    lastHudHash: '',
+    lastAddonsHash: '',
+    lastModalHash: '',
+    lastPopupHash: '',
+    lastStylesHash: '',
+    canvasCache: new Map(),
+    ridersUserScrollUntil: 0,
+    programmaticRidersScrollUntil: 0,
+    lastGraphW: 0,
+    lastGraphH: 0,
+  };
+
+  function sendAction(action) {
+    try {
+      if (window.TerraDual && typeof window.TerraDual.dispatchAction === 'function') {
+        window.TerraDual.dispatchAction(JSON.stringify(action));
+      }
+    } catch (e) {
+      console.error('TerraDual dispatch failed', e);
+    }
+  }
+
+  function syncRidersScroll(hudHost, prevMainScroll = 0, prevListScroll = 0, forceFollow = false) {
+    if (!hudHost) return;
+    const mainEl = hudHost.querySelector('.riders-main');
+    const listEl = hudHost.querySelector('.riders-list');
+    const box = mainEl || listEl;
+    if (!box) return;
+    const prevScroll = mainEl ? prevMainScroll : prevListScroll;
+    state.programmaticRidersScrollUntil = Date.now() + 80;
+    if (prevScroll > 0) {
+      box.scrollTop = prevScroll;
+    }
+    if (!forceFollow && Date.now() < state.ridersUserScrollUntil) {
+      return;
+    }
+    if (box.scrollHeight <= box.clientHeight + 1) return;
+    const meEl = box.querySelector('.rider.is-me:not(.is-group)') || box.querySelector('.rider.is-me');
+    if (!meEl) return;
+    const boxRect = box.getBoundingClientRect();
+    const meRect = meEl.getBoundingClientRect();
+    if (boxRect.height <= 0 || meRect.height <= 0) return;
+    if (meRect.top < boxRect.top - 1 || meRect.bottom > boxRect.bottom + 1) {
+      const targetTop = box.scrollTop + (meRect.top - boxRect.top) - (box.clientHeight - meRect.height) / 2;
+      const maxScroll = Math.max(0, box.scrollHeight - box.clientHeight);
+      state.programmaticRidersScrollUntil = Date.now() + 80;
+      box.scrollTop = Math.max(0, Math.min(maxScroll, targetTop));
+    }
+  }
+
+  function setMode(nextMode, notifyNative = true) {
+    const m = nextMode === 'mirror' ? 'mirror' : 'cockpit';
+    state.mode = m;
+    $('btn-mode-cockpit').classList.toggle('active', m === 'cockpit');
+    $('btn-mode-mirror').classList.toggle('active', m === 'mirror');
+    $('cockpit-view').hidden = (m !== 'cockpit');
+    $('mirror-view').hidden = (m !== 'mirror');
+    if (m === 'mirror') {
+      state.ridersUserScrollUntil = 0;
+      syncRidersScroll($('mir-hud'), 0, 0, true);
+      reportMirrorMetrics();
+    }
+    if (notifyNative) {
+      sendAction({ type: 'setMode', mode: m });
+    }
+  }
+
+  $('btn-mode-cockpit').addEventListener('click', () => setMode('cockpit', true));
+  $('btn-mode-mirror').addEventListener('click', () => setMode('mirror', true));
+  $('btn-top-settings').addEventListener('click', () => sendAction({ type: 'openSettings' }));
+
+  $('btn-act-start').addEventListener('click', () => sendAction({ type: 'cockpitAction', name: 'lifecycle' }));
+  $('btn-act-menu').addEventListener('click', () => sendAction({ type: 'cockpitAction', name: 'menu' }));
+  $('btn-act-cam').addEventListener('click', () => sendAction({ type: 'cockpitAction', name: 'camera' }));
+  $('btn-act-shot').addEventListener('click', () => sendAction({ type: 'cockpitAction', name: 'screenshot' }));
+  $('btn-act-chat').addEventListener('click', () => sendAction({ type: 'cockpitAction', name: 'chat' }));
+  $('btn-act-gear').addEventListener('click', () => sendAction({ type: 'openSettings' }));
+  $('btn-map-zoom').addEventListener('click', () => sendAction({ type: 'cockpitAction', name: 'mapZoom' }));
+  $('btn-map-compass').addEventListener('click', () => sendAction({ type: 'cockpitAction', name: 'mapCompass' }));
+  $('ck-popup-close').addEventListener('click', () => sendAction({ type: 'cockpitAction', name: 'closePopup' }));
+
+  function wireMirrorDelegation(container) {
+    container.addEventListener('click', (e) => {
+      const target = e.target && e.target.closest ? e.target.closest('[data-terra-mir-id]') : null;
+      if (!target) return;
+      const tag = target.tagName;
+      if (tag === 'INPUT' && (target.type === 'text' || target.type === 'search' || target.type === 'number' || target.type === 'password')) {
+        return;
+      }
+      if (tag === 'SELECT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+      e.stopPropagation();
+      sendAction({ type: 'mirClick', mirId: target.getAttribute('data-terra-mir-id') });
+    }, true);
+
+    container.addEventListener('change', (e) => {
+      const target = e.target && e.target.closest ? e.target.closest('[data-terra-mir-id]') : null;
+      if (!target) return;
+      const mirId = target.getAttribute('data-terra-mir-id');
+      if (target.type === 'checkbox' || target.type === 'radio') {
+        sendAction({ type: 'mirInput', mirId, checked: !!target.checked, value: target.value });
+      } else {
+        sendAction({ type: 'mirInput', mirId, value: target.value });
+      }
+    }, true);
+
+    let liveTimer = null;
+    container.addEventListener('input', (e) => {
+      const target = e.target && e.target.closest ? e.target.closest('[data-terra-mir-id]') : null;
+      if (!target || target.tagName !== 'INPUT' || target.type !== 'search') return;
+      const mirId = target.getAttribute('data-terra-mir-id');
+      const val = target.value;
+      if (liveTimer) clearTimeout(liveTimer);
+      liveTimer = setTimeout(() => {
+        liveTimer = null;
+        sendAction({ type: 'mirLiveInput', mirId, value: val });
+      }, 90);
+    }, true);
+
+    container.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const target = e.target && e.target.closest ? e.target.closest('[data-terra-mir-id]') : null;
+      if (!target) return;
+      const mirId = target.getAttribute('data-terra-mir-id');
+      sendAction({ type: 'mirEnter', mirId, value: target.value || '' });
+    }, true);
+  }
+
+  wireMirrorDelegation($('mirror-view'));
+  wireMirrorDelegation($('ck-popup-sheet'));
+  wireMirrorDelegation($('mir-modal'));
+
+  const mirHudEl = $('mir-hud');
+  const markUserRidersScroll = (e) => {
+    if (e.target && e.target.closest && e.target.closest('.riders-main, .riders-list')) {
+      state.ridersUserScrollUntil = Date.now() + 4000;
+    }
+  };
+  mirHudEl.addEventListener('touchmove', markUserRidersScroll, { capture: true, passive: true });
+  mirHudEl.addEventListener('wheel', markUserRidersScroll, { capture: true, passive: true });
+  mirHudEl.addEventListener('scroll', (e) => {
+    if (Date.now() < state.programmaticRidersScrollUntil) return;
+    if (e.target && e.target.matches && e.target.matches('.riders-main, .riders-list')) {
+      state.ridersUserScrollUntil = Date.now() + 4000;
+    }
+  }, { capture: true, passive: true });
+
+  document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (t && t.matches && t.matches('input, select, textarea')) {
+      try { window.TerraDual && window.TerraDual.setFocusable && window.TerraDual.setFocusable(true); } catch {}
+    }
+  }, true);
+  document.addEventListener('focusout', () => {
+    setTimeout(() => {
+      const ae = document.activeElement;
+      if (!ae || !ae.matches || !ae.matches('input, select, textarea')) {
+        try { window.TerraDual && window.TerraDual.setFocusable && window.TerraDual.setFocusable(false); } catch {}
+      }
+    }, 80);
+  }, true);
+
+  function applyStyles(styles) {
+    if (!styles) return;
+    const hash = JSON.stringify(styles);
+    if (hash === state.lastStylesHash) return;
+    state.lastStylesHash = hash;
+
+    const head = document.head;
+    const wantedLinks = new Set(styles.links || []);
+    for (const el of [...head.querySelectorAll('link[data-terra-mir-link]')]) {
+      if (!wantedLinks.has(el.getAttribute('href'))) el.remove();
+    }
+    for (const href of wantedLinks) {
+      if (!head.querySelector(`link[data-terra-mir-link][href="${CSS.escape(href)}"]`)) {
+        const l = document.createElement('link');
+        l.rel = 'stylesheet';
+        l.href = href;
+        l.setAttribute('data-terra-mir-link', '1');
+        head.appendChild(l);
+      }
+    }
+    $('terra-mir-inline-styles').textContent = (styles.inline || []).join('\n');
+  }
+
+  function paintCachedCanvas(cvs, entry) {
+    if (!cvs || !entry || !entry.ready || !entry.offscreen) return;
+    try {
+      const ctx = cvs.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, cvs.width, cvs.height);
+        ctx.drawImage(entry.offscreen, 0, 0, cvs.width, cvs.height);
+      }
+    } catch {}
+  }
+
+  function applyCanvasSnapshots(root, canvases) {
+    if (!canvases || !root) return;
+    for (const cvs of root.querySelectorAll('canvas[data-terra-canvas-id]')) {
+      const cid = cvs.getAttribute('data-terra-canvas-id');
+      const dataUrl = canvases[cid];
+      let entry = state.canvasCache.get(cid);
+      if (entry && entry.ready) {
+        paintCachedCanvas(cvs, entry);
+      }
+      if (!dataUrl) continue;
+      if (!entry) {
+        entry = { src: '', ready: false, offscreen: document.createElement('canvas'), img: new Image() };
+        entry.img.onload = () => {
+          try {
+            const w = entry.img.naturalWidth || cvs.width || 1;
+            const h = entry.img.naturalHeight || cvs.height || 1;
+            entry.offscreen.width = w;
+            entry.offscreen.height = h;
+            const octx = entry.offscreen.getContext('2d');
+            if (octx) {
+              octx.clearRect(0, 0, w, h);
+              octx.drawImage(entry.img, 0, 0, w, h);
+            }
+            entry.ready = true;
+            for (const liveCvs of document.querySelectorAll(`canvas[data-terra-canvas-id="${CSS.escape(cid)}"]`)) {
+              paintCachedCanvas(liveCvs, entry);
+            }
+          } catch {}
+        };
+        state.canvasCache.set(cid, entry);
+      }
+      if (entry.src !== dataUrl) {
+        entry.src = dataUrl;
+        entry.img.src = dataUrl;
+      }
+    }
+  }
+
+  function powerColor(pwr, ftp) {
+    if (!(pwr > 0) || !(ftp > 0)) return 'transparent';
+    const pct = pwr / ftp;
+    if (pct <= 0.55) return '#009e80';
+    if (pct <= 0.75) return '#22c55e';
+    if (pct <= 0.90) return '#eab308';
+    if (pct <= 1.05) return '#f97316';
+    if (pct <= 1.20) return '#ef4444';
+    return '#a855f7';
+  }
+
+  function renderCockpit(ck) {
+    if (!ck) return;
+    $('tb-timer').textContent = ck.timer || '00:00';
+    $('tb-status').textContent = ck.statusPill || (ck.presence ? `${ck.presence} · ${ck.ping || ''}`.replace(/ · $/, '') : 'Ride');
+    const paused = !!ck.isPaused || ck.lifecycleLabel === 'Start';
+    $('tb-dot').classList.toggle('paused', paused);
+
+    const startBtn = $('btn-act-start');
+    if (ck.lifecycleLabel === 'Pause' || ck.lifecycleTitle === 'Pause') {
+      startBtn.innerHTML = '&#10074;&#10074; Pause';
+      startBtn.className = 'ck-act-btn paused';
+    } else {
+      startBtn.innerHTML = '&#9654; Start';
+      startBtn.className = 'ck-act-btn primary';
+    }
+
+    $('ck-pwr').textContent = ck.power ?? '--';
+    $('ck-pwr-sub').textContent = ck.powerSub || '0 avg';
+    $('ck-wkg').textContent = ck.wkg ? `${ck.wkg} W/kg` : '';
+    const pwrNum = parseFloat(ck.power);
+    $('card-power').style.setProperty('--accent-bar', powerColor(pwrNum, ck.ftp || 280));
+
+    $('ck-hr').textContent = ck.hr ?? '--';
+    $('ck-hr-sub').textContent = ck.hrSub || '0 avg';
+    $('card-hr').style.setProperty('--accent-bar', '#ef4444');
+
+    $('ck-cad').textContent = ck.cadence ?? '0';
+    $('ck-cad-sub').textContent = ck.cadenceSub || '0 avg';
+    $('card-cad').style.setProperty('--accent-bar', '#f59e0b');
+
+    $('ck-spd').textContent = ck.speed ?? '0.0';
+    $('ck-spd-unit').textContent = ck.speedUnit || 'kph';
+    $('ck-spd-sub').textContent = ck.speedSub || '0.0 avg';
+    $('card-spd').style.setProperty('--accent-bar', '#3b82f6');
+
+    $('ck-dist').textContent = ck.dist || '0.00 km';
+    $('ck-dist-sub').textContent = ck.distSub || '';
+    $('ck-climb').textContent = ck.climb || '0 m';
+    $('ck-climb-sub').textContent = ck.climbSub || '';
+    $('ck-grade').textContent = ck.grade != null ? `${ck.grade}%` : '0.0%';
+    $('ck-draft').textContent = `Draft ${ck.draft ?? 0} W`;
+
+    if (ck.gearText) {
+      $('ck-extra-lbl').textContent = ck.ergMode ? 'ERG Mode' : 'Gear';
+      $('ck-extra').textContent = ck.gearText;
+      $('ck-extra-sub').textContent = ck.kcal ? `${ck.kcal} kcal` : '';
+    } else {
+      $('ck-extra-lbl').textContent = 'Energy';
+      $('ck-extra').textContent = `${ck.kcal || '0'} kcal`;
+      $('ck-extra-sub').textContent = ck.kcalSub || '0 /hr';
+    }
+
+    if (ck.mapImg) {
+      $('ck-map-img').src = ck.mapImg;
+      $('ck-map-img').hidden = false;
+      $('ck-map-empty').hidden = true;
+    } else {
+      $('ck-map-img').hidden = true;
+      $('ck-map-empty').hidden = false;
+    }
+    if (ck.mapZoomLabel) $('btn-map-zoom').textContent = ck.mapZoomLabel;
+
+    const elevBox = $('ck-elev-box');
+    if (ck.elevSvg && elevBox.dataset.svgHash !== ck.elevSvgHash) {
+      elevBox.dataset.svgHash = ck.elevSvgHash || '';
+      const cursor = $('ck-elev-cursor');
+      elevBox.innerHTML = ck.elevSvg;
+      elevBox.appendChild(cursor);
+    }
+    if (ck.elevPct != null) {
+      $('ck-elev-cursor').style.left = `${ck.elevPct}%`;
+      $('ck-elev-pct').textContent = `${Math.round(ck.elevPct)}%`;
+    }
+
+    if (ck.climbBanner && ck.climbBanner.title) {
+      $('ck-climb-banner').hidden = false;
+      $('ck-climb-title').textContent = ck.climbBanner.title;
+      $('ck-climb-meta').textContent = ck.climbBanner.meta || '';
+    } else {
+      $('ck-climb-banner').hidden = true;
+    }
+
+    if (ck.workoutBanner && ck.workoutBanner.title) {
+      $('ck-workout-banner').hidden = false;
+      $('ck-wo-title').textContent = ck.workoutBanner.title;
+      $('ck-wo-meta').textContent = ck.workoutBanner.meta || '';
+    } else {
+      $('ck-workout-banner').hidden = true;
+    }
+
+    const ridersRow = $('ck-riders-row');
+    const riders = ck.riders || [];
+    const rNodes = riders.map((r) => {
+      const chip = document.createElement('div');
+      chip.className = 'ck-rider-chip' + (r.isMe ? ' me' : '');
+      const gap = document.createElement('span');
+      gap.className = 'ck-rider-gap';
+      gap.textContent = r.gap || '--';
+      const nm = document.createElement('span');
+      nm.className = 'ck-rider-name';
+      nm.textContent = r.name || 'Rider';
+      const st = document.createElement('span');
+      st.className = 'ck-rider-stat';
+      st.textContent = r.stat || '';
+      if (r.pos != null) {
+        const pos = document.createElement('span');
+        pos.className = 'ck-rider-pos';
+        pos.textContent = `#${r.pos}`;
+        chip.append(pos, gap, nm, st);
+      } else {
+        chip.append(gap, nm, st);
+      }
+      return chip;
+    });
+    ridersRow.replaceChildren(...rNodes);
+    const meChip = ridersRow.querySelector('.ck-rider-chip.me');
+    if (meChip && ridersRow.scrollWidth > ridersRow.clientWidth) {
+      const targetLeft = meChip.offsetLeft - (ridersRow.clientWidth - meChip.offsetWidth) / 2;
+      ridersRow.scrollLeft = Math.max(0, Math.min(ridersRow.scrollWidth - ridersRow.clientWidth, targetLeft));
+    }
+
+    // If Biketerra's ride menu or chat panel is open while in Cockpit mode, show it in popup sheet
+    const sheet = $('ck-popup-sheet');
+    if (ck.popupHtml) {
+      sheet.hidden = false;
+      $('ck-popup-title').textContent = ck.popupTitle || 'Menu';
+      if (state.lastPopupHash !== ck.popupHash) {
+        state.lastPopupHash = ck.popupHash || '';
+        const popupBody = $('ck-popup-body');
+        const activeChat = document.activeElement && popupBody.contains(document.activeElement) && document.activeElement.classList.contains('chat-input')
+          ? document.activeElement.value
+          : null;
+        popupBody.innerHTML = ck.popupHtml;
+        if (activeChat !== null) {
+          const inp = popupBody.querySelector('.chat-input');
+          if (inp) { inp.value = activeChat; inp.focus(); }
+        }
+      }
+    } else {
+      sheet.hidden = true;
+      state.lastPopupHash = '';
+      if ($('ck-popup-body').innerHTML) $('ck-popup-body').innerHTML = '';
+    }
+  }
+
+  function renderModal(modal) {
+    if (!modal) return;
+    if (modal.modalHash !== state.lastModalHash) {
+      state.lastModalHash = modal.modalHash || '';
+      const host = $('mir-modal');
+      const mainEl = host.querySelector('.terra-main');
+      const catListEl = host.querySelector('.terra-catalog-list');
+      const mainScroll = mainEl ? mainEl.scrollTop : 0;
+      const catScroll = catListEl ? catListEl.scrollTop : 0;
+      const ae = document.activeElement;
+      let focusState = null;
+      if (ae && host.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') && ae.type !== 'checkbox' && ae.type !== 'radio') {
+        const mirId = ae.getAttribute('data-terra-mir-id');
+        if (mirId) {
+          focusState = {
+            mirId,
+            value: ae.value,
+            start: ae.selectionStart,
+            end: ae.selectionEnd,
+          };
+        }
+      }
+      host.innerHTML = modal.modalHtml || '';
+      const nextMain = host.querySelector('.terra-main');
+      if (nextMain && mainScroll > 0) nextMain.scrollTop = mainScroll;
+      const nextCat = host.querySelector('.terra-catalog-list');
+      if (nextCat && catScroll > 0) nextCat.scrollTop = catScroll;
+      if (focusState) {
+        const nextInp = host.querySelector(`[data-terra-mir-id="${CSS.escape(focusState.mirId)}"]`);
+        if (nextInp) {
+          nextInp.value = focusState.value;
+          try { nextInp.focus({ preventScroll: true }); } catch { try { nextInp.focus(); } catch {} }
+          if (focusState.start != null && focusState.end != null && nextInp.setSelectionRange) {
+            try { nextInp.setSelectionRange(focusState.start, focusState.end); } catch {}
+          }
+        }
+      }
+    }
+  }
+
+  function reportMirrorMetrics() {
+    if (state.mode !== 'mirror') return;
+    const gCell = $('mir-hud').querySelector('.zone-effort .stat-cell:has(canvas.terra-dark-graph)');
+    if (!gCell) return;
+    const r = gCell.getBoundingClientRect();
+    const w = Math.floor(r.width);
+    const h = Math.floor(r.height);
+    if (w > 40 && h > 20 && (w !== state.lastGraphW || h !== state.lastGraphH)) {
+      state.lastGraphW = w;
+      state.lastGraphH = h;
+      sendAction({ type: 'mirMetrics', graphW: w, graphH: h });
+    }
+  }
+
+  function annotateRiderPositions(hudHost) {
+    if (!hudHost) return;
+    const mainEl = hudHost.querySelector('.riders-main');
+    if (!mainEl) return;
+    if (mainEl.querySelector('.rider.is-group')) return;
+    const rows = mainEl.querySelectorAll('.rider');
+    rows.forEach((row, idx) => {
+      row.setAttribute('data-terra-pos', String(idx + 1));
+    });
+  }
+
+  function renderMirror(mir) {
+    if (!mir) return;
+    if (mir.timer) $('tb-timer').textContent = mir.timer;
+    if (mir.statusPill) $('tb-status').textContent = mir.statusPill;
+
+    if (mir.hudHash !== state.lastHudHash) {
+      state.lastHudHash = mir.hudHash || '';
+      const hudHost = $('mir-hud');
+      const effScroll = hudHost.querySelector('.zone-effort')?.scrollTop || 0;
+      const ridersMainScroll = hudHost.querySelector('.riders-main')?.scrollTop || 0;
+      const ridersListScroll = hudHost.querySelector('.riders-list')?.scrollTop || 0;
+      hudHost.innerHTML = mir.hudHtml || '';
+      if (effScroll > 0) {
+        const el = hudHost.querySelector('.zone-effort');
+        if (el) el.scrollTop = effScroll;
+      }
+      annotateRiderPositions(hudHost);
+      syncRidersScroll(hudHost, ridersMainScroll, ridersListScroll, false);
+      reportMirrorMetrics();
+    }
+    if (mir.addonsHash !== state.lastAddonsHash) {
+      state.lastAddonsHash = mir.addonsHash || '';
+      $('mir-addons').innerHTML = mir.addonsHtml || '';
+    }
+    if (mir.menuHash !== state.lastMenuHash) {
+      state.lastMenuHash = mir.menuHash || '';
+      const menuHost = $('mir-menu');
+      const menuScroll = menuHost.querySelector('.menu-scroll')?.scrollTop || 0;
+      menuHost.innerHTML = mir.menuHtml || '';
+      if (menuScroll > 0) {
+        const el = menuHost.querySelector('.menu-scroll');
+        if (el) el.scrollTop = menuScroll;
+      }
+    }
+    if (mir.canvases) {
+      applyCanvasSnapshots($('mirror-view'), mir.canvases);
+    }
+  }
+
+  window.__terraDualReceive = (payload) => {
+    if (!payload) return;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch { return; }
+    }
+    if (payload.mode && payload.mode !== state.mode) {
+      setMode(payload.mode, false);
+    }
+    if (payload.styles) applyStyles(payload.styles);
+    if (payload.modal) renderModal(payload.modal);
+    if (payload.cockpit) renderCockpit(payload.cockpit);
+    if (payload.mirror) renderMirror(payload.mirror);
+  };
+
+  window.__terraDualSetState = (st) => {
+    if (!st) return;
+    if (st.mode) setMode(st.mode, false);
+  };
+
+  try {
+    if (window.TerraDual && typeof window.TerraDual.onReady === 'function') {
+      window.TerraDual.onReady();
+    }
+  } catch {}
+})();
+</script>
+</body>
+</html>

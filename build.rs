@@ -72,6 +72,9 @@ fn main() {
                 "terra_pip_status",
                 "terra_pip_configure",
                 "terra_enter_pip",
+                "terra_dualscreen_status",
+                "terra_dualscreen_configure",
+                "terra_dualscreen_push",
             ]),
         ),
     )
