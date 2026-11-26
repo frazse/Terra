@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1] — Android Picture-in-Picture & `terra-climb` v0.5.0
+
+### Added
+- **Android Picture-in-Picture (PiP) support during rides** — added opt-in PiP support for `/ride*` and `/spectate*` pages ([AndroidManifest.xml](gen/android/app/src/main/AndroidManifest.xml), `MainActivity.kt`, `android_pip.rs`, `terra-ui.js`) with a compact single-row rider-stats HUD (hiding the zones bar, `kcal`, and floating overlays), `Auto-enter PiP` when leaving Terra during a ride, and an optional quick PiP button in ride controls (both off by default in **Terra Settings → Picture-in-Picture (PiP)**).
+
+### Changed
+- **Refreshed `Terra-Addons` submodule** — includes `terra-climb` v0.5.0 (selectable `processGPX` / Fiets climb detection, Biketerra grade & draft colors).
+
 ## [0.12.0] — Native BLE Bridge (Linux & Android), BlueZ & Android BLE Overhaul, Ride Backups & AppImage Wayland Icon
 
 ### Added

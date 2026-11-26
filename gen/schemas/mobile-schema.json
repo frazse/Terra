@@ -507,6 +507,12 @@
           "markdownDescription": "Enables the terra_dismiss_data_dir_prompt command without any pre-configured scope."
         },
         {
+          "description": "Enables the terra_enter_pip command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-enter-pip",
+          "markdownDescription": "Enables the terra_enter_pip command without any pre-configured scope."
+        },
+        {
           "description": "Enables the terra_export_ride_gpx command without any pre-configured scope.",
           "type": "string",
           "const": "allow-terra-export-ride-gpx",
@@ -529,6 +535,18 @@
           "type": "string",
           "const": "allow-terra-pick-data-dir",
           "markdownDescription": "Enables the terra_pick_data_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_pip_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-pip-configure",
+          "markdownDescription": "Enables the terra_pip_configure command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terra_pip_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terra-pip-status",
+          "markdownDescription": "Enables the terra_pip_status command without any pre-configured scope."
         },
         {
           "description": "Enables the terra_read_ride_backup command without any pre-configured scope.",
@@ -873,6 +891,12 @@
           "markdownDescription": "Denies the terra_dismiss_data_dir_prompt command without any pre-configured scope."
         },
         {
+          "description": "Denies the terra_enter_pip command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-enter-pip",
+          "markdownDescription": "Denies the terra_enter_pip command without any pre-configured scope."
+        },
+        {
           "description": "Denies the terra_export_ride_gpx command without any pre-configured scope.",
           "type": "string",
           "const": "deny-terra-export-ride-gpx",
@@ -895,6 +919,18 @@
           "type": "string",
           "const": "deny-terra-pick-data-dir",
           "markdownDescription": "Denies the terra_pick_data_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_pip_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-pip-configure",
+          "markdownDescription": "Denies the terra_pip_configure command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terra_pip_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terra-pip-status",
+          "markdownDescription": "Denies the terra_pip_status command without any pre-configured scope."
         },
         {
           "description": "Denies the terra_read_ride_backup command without any pre-configured scope.",

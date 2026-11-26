@@ -76,6 +76,9 @@ pub fn run() {
             crate::android_data_dir::terra_read_ride_backup,
             crate::android_data_dir::terra_export_ride_gpx,
             crate::android_data_dir::terra_delete_ride_backup,
+            crate::android_pip::terra_pip_status,
+            crate::android_pip::terra_pip_configure,
+            crate::android_pip::terra_enter_pip,
         ])
         .setup(|app| {
             let handle = app.handle();

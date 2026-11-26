@@ -2,23 +2,28 @@ package dev.frazse.terra
 
 import android.Manifest
 import android.app.ActivityManager
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.net.Uri
 import android.net.http.SslError
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Looper
 import android.os.Message
 import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.Settings
+import android.util.Rational
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -57,11 +62,18 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class MainActivity : TauriActivity() {
   companion object {
     private var instance: MainActivity? = null
     private var dataDirResult: String = "pending" // "pending" | "cancelled" | "success:<path>" | "error:<msg>"
+    private const val PREFS_NAME = "terra_prefs"
+    private const val PREF_PIP_ENABLED = "pip_enabled"
+    private const val PREF_PIP_AUTO_ENTER = "pip_auto_enter"
+    private const val PREF_PIP_HUD_MODE = "pip_hud_mode"
+    private const val PREF_PIP_SHOW_BUTTON = "pip_show_button"
 
     @Keep
     @JvmStatic
@@ -73,10 +85,79 @@ class MainActivity : TauriActivity() {
 
     @Keep
     @JvmStatic
+    fun getPipStatusJson(): String {
+      val act = instance ?: return org.json.JSONObject().put("supported", false).toString()
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        return act.buildPipStatusJson()
+      }
+      var result = act.buildPipStatusJson()
+      val latch = CountDownLatch(1)
+      act.runOnUiThread {
+        try {
+          result = act.buildPipStatusJson()
+        } finally {
+          latch.countDown()
+        }
+      }
+      latch.await(1000, TimeUnit.MILLISECONDS)
+      return result
+    }
+
+    @Keep
+    @JvmStatic
+    fun configurePip(
+      enabled: Boolean,
+      autoEnter: Boolean,
+      hudMode: String,
+      showButton: Boolean,
+      inRide: Boolean
+    ): String {
+      val act = instance ?: return org.json.JSONObject().put("supported", false).toString()
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        act.applyPipConfig(enabled, autoEnter, hudMode, showButton, inRide)
+        return act.buildPipStatusJson()
+      }
+      var result = act.buildPipStatusJson()
+      val latch = CountDownLatch(1)
+      act.runOnUiThread {
+        try {
+          act.applyPipConfig(enabled, autoEnter, hudMode, showButton, inRide)
+          result = act.buildPipStatusJson()
+        } finally {
+          latch.countDown()
+        }
+      }
+      latch.await(1500, TimeUnit.MILLISECONDS)
+      return result
+    }
+
+    @Keep
+    @JvmStatic
+    fun enterPipModeJni(): Boolean {
+      val act = instance ?: return false
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        return act.enterPipMode()
+      }
+      var entered = false
+      val latch = CountDownLatch(1)
+      act.runOnUiThread {
+        try {
+          entered = act.enterPipMode()
+        } finally {
+          latch.countDown()
+        }
+      }
+      latch.await(1500, TimeUnit.MILLISECONDS)
+      return entered
+    }
+
+    @Keep
+    @JvmStatic
     fun startDataDirPicker() {
       dataDirResult = "pending"
       instance?.runOnUiThread {
         val act = instance ?: return@runOnUiThread
+        act.suppressAutoPipUntilMs = SystemClock.elapsedRealtime() + 5000L
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
           try {
             val intent = Intent(
@@ -223,6 +304,13 @@ class MainActivity : TauriActivity() {
   }
 
   private var isFullscreen = true
+  private var pipEnabled = false
+  private var pipAutoEnter = true
+  private var pipHudMode = "compact"
+  private var pipShowButton = false
+  private var inRideRoute = false
+  private var pendingPipEnter = false
+  private var suppressAutoPipUntilMs = 0L
   private var dataDirLauncher: ActivityResultLauncher<Uri?>? = null
   private var storagePermLauncher: ActivityResultLauncher<Intent>? = null
   private val btAppMarker = Regex("""(?<![.\w$])this\.riderController\.handleInput\(\s*\)""")
@@ -230,11 +318,14 @@ class MainActivity : TauriActivity() {
   private val unmatchedChunks = ConcurrentHashMap.newKeySet<String>()
   private var btAppWrappedClient: WebViewClient? = null
   private var wrappedChromeClient: WebChromeClient? = null
+  private var pipLayoutTrackedWebView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     instance = this
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+
+    loadPipPrefs()
 
     dataDirLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
       handleDataDirPicked(uri)
@@ -259,7 +350,8 @@ class MainActivity : TauriActivity() {
     extractBundledAddons()
 
     ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
-      if (!isFullscreen) {
+      val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode
+      if (!isFullscreen && !inPip) {
         val statusBarHeight = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
         val navBarHeight = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
         view.setPadding(0, statusBarHeight, 0, navBarHeight)
@@ -276,7 +368,15 @@ class MainActivity : TauriActivity() {
 
     window.decorView.post {
       setupWebViewFullscreen()
+      updatePictureInPictureParams()
     }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    pendingPipEnter = false
+    suppressAutoPipUntilMs = 0L
+    updatePictureInPictureParams()
   }
 
   override fun onPause() {
@@ -284,6 +384,68 @@ class MainActivity : TauriActivity() {
     try {
       CookieManager.getInstance().flush()
     } catch (_: Exception) {}
+
+    val inPip = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) || pendingPipEnter
+    if (inPip) {
+      // WryActivity.onPause() unconditionally calls mWebView.onPause(), which freezes
+      // WebGL/WebGPU and JS timers while the Activity is still visible in PiP.
+      findWebView(window.decorView)?.let { wv ->
+        wv.onResume()
+        wv.resumeTimers()
+      }
+    }
+  }
+
+  override fun onStop() {
+    super.onStop()
+    pendingPipEnter = false
+    val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode
+    if (!inPip) {
+      findWebView(window.decorView)?.onPause()
+    }
+  }
+
+  override fun onUserLeaveHint() {
+    super.onUserLeaveHint()
+    if (Build.VERSION.SDK_INT in Build.VERSION_CODES.O until Build.VERSION_CODES.S) {
+      if (SystemClock.elapsedRealtime() < suppressAutoPipUntilMs) return
+      if (pipEnabled && pipAutoEnter && inRideRoute && !isInPictureInPictureMode) {
+        enterPipMode()
+      }
+    }
+  }
+
+  override fun onPictureInPictureUiStateChanged(pipState: android.app.PictureInPictureUiState) {
+    super.onPictureInPictureUiStateChanged(pipState)
+    if (Build.VERSION.SDK_INT >= 35 && pipState.isTransitioningToPip) {
+      pendingPipEnter = true
+      window.decorView.setPadding(0, 0, 0, 0)
+      dispatchPipStateToWebView(true)
+    }
+  }
+
+  override fun onPictureInPictureModeChanged(
+    isInPictureInPictureMode: Boolean,
+    newConfig: Configuration
+  ) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    pendingPipEnter = false
+    if (isInPictureInPictureMode) {
+      window.decorView.setPadding(0, 0, 0, 0)
+      findWebView(window.decorView)?.let { wv ->
+        wv.onResume()
+        wv.resumeTimers()
+      }
+      window.decorView.post {
+        findWebView(window.decorView)?.let { wv ->
+          wv.onResume()
+          wv.resumeTimers()
+        }
+      }
+    } else {
+      toggleFullscreen(isFullscreen)
+    }
+    dispatchPipStateToWebView(isInPictureInPictureMode)
   }
 
   override fun onDestroy() {
@@ -499,8 +661,9 @@ class MainActivity : TauriActivity() {
   fun toggleFullscreen(enable: Boolean? = null) {
     val target = enable ?: !isFullscreen
     isFullscreen = target
+    val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode
     val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-    if (target) {
+    if (target || inPip) {
       insetsController.hide(WindowInsetsCompat.Type.systemBars())
       insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
       window.decorView.setPadding(0, 0, 0, 0)
@@ -513,6 +676,146 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  private fun isPipSupported(): Boolean =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+      packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+  private fun loadPipPrefs() {
+    val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+    pipEnabled = prefs.getBoolean(PREF_PIP_ENABLED, false)
+    pipAutoEnter = prefs.getBoolean(PREF_PIP_AUTO_ENTER, true)
+    pipHudMode = "compact"
+    pipShowButton = prefs.getBoolean(PREF_PIP_SHOW_BUTTON, false)
+  }
+
+  private fun applyPipConfig(
+    enabled: Boolean,
+    autoEnter: Boolean,
+    hudMode: String,
+    showButton: Boolean,
+    inRide: Boolean
+  ) {
+    pipEnabled = enabled
+    pipAutoEnter = autoEnter
+    pipHudMode = "compact"
+    pipShowButton = showButton
+    inRideRoute = inRide
+    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+      .putBoolean(PREF_PIP_ENABLED, pipEnabled)
+      .putBoolean(PREF_PIP_AUTO_ENTER, pipAutoEnter)
+      .putString(PREF_PIP_HUD_MODE, pipHudMode)
+      .putBoolean(PREF_PIP_SHOW_BUTTON, pipShowButton)
+      .apply()
+    updatePictureInPictureParams()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) {
+      dispatchPipStateToWebView(true)
+    }
+  }
+
+  private fun buildPipStatusJson(): String {
+    val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode
+    return org.json.JSONObject()
+      .put("supported", isPipSupported())
+      .put("enabled", pipEnabled)
+      .put("autoEnter", pipAutoEnter)
+      .put("hudMode", pipHudMode)
+      .put("showButton", pipShowButton)
+      .put("inRide", inRideRoute)
+      .put("inPip", inPip)
+      .toString()
+  }
+
+  private fun buildPipParams(autoEnter: Boolean): PictureInPictureParams? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+    val builder = PictureInPictureParams.Builder()
+      .setAspectRatio(Rational(16, 9))
+    findWebView(window.decorView)?.let { wv ->
+      if (wv.width > 0 && wv.height > 0) {
+        val rect = Rect()
+        if (wv.getGlobalVisibleRect(rect) && !rect.isEmpty) {
+          builder.setSourceRectHint(rect)
+        }
+      }
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      builder.setAutoEnterEnabled(autoEnter)
+      builder.setSeamlessResizeEnabled(true)
+    }
+    return builder.build()
+  }
+
+  private fun updatePictureInPictureParams() {
+    if (!isPipSupported() || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val auto = pipEnabled && pipAutoEnter && inRideRoute
+    val params = buildPipParams(auto) ?: return
+    try {
+      setPictureInPictureParams(params)
+    } catch (_: Exception) {}
+  }
+
+  private fun enterPipMode(): Boolean {
+    if (!isPipSupported() || !pipEnabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+      return false
+    }
+    if (isInPictureInPictureMode) return true
+    val params = buildPipParams(pipEnabled && pipAutoEnter && inRideRoute) ?: return false
+    pendingPipEnter = true
+    val ok = try {
+      enterPictureInPictureMode(params)
+    } catch (e: Exception) {
+      android.util.Log.w("Terra", "enterPictureInPictureMode failed: ${e.message}")
+      false
+    }
+    if (!ok) {
+      pendingPipEnter = false
+    } else {
+      dispatchPipStateToWebView(true)
+    }
+    return ok
+  }
+
+  private fun isRideUrl(rawUrl: String?): Boolean {
+    if (rawUrl.isNullOrBlank()) return false
+    return try {
+      val uri = Uri.parse(rawUrl)
+      val host = uri.host?.lowercase() ?: return false
+      val path = uri.path ?: ""
+      (host == "biketerra.com" || host.endsWith(".biketerra.com")) &&
+        (path == "/ride" || path.startsWith("/ride/") || path == "/spectate" || path.startsWith("/spectate/"))
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  private fun updateRideStateFromUrl(url: String?) {
+    val next = isRideUrl(url)
+    if (next != inRideRoute) {
+      inRideRoute = next
+      updatePictureInPictureParams()
+    }
+  }
+
+  private fun dispatchPipStateToWebView(inPip: Boolean) {
+    val wv = findWebView(window.decorView) ?: return
+    val modeQuoted = org.json.JSONObject.quote(pipHudMode)
+    val js = "window.__terraSetPipState && window.__terraSetPipState(${if (inPip) "true" else "false"}, $modeQuoted);"
+    wv.post {
+      try {
+        wv.evaluateJavascript(js, null)
+      } catch (_: Exception) {}
+    }
+  }
+
+  private fun trackPipLayoutOnWebView(webView: WebView) {
+    if (pipLayoutTrackedWebView === webView) return
+    pipLayoutTrackedWebView = webView
+    webView.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+      if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+        updatePictureInPictureParams()
+      }
+    }
+  }
+
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     clearBtAppChunkCacheOnce(webView)
@@ -522,6 +825,7 @@ class MainActivity : TauriActivity() {
     super.setContentView(view)
     val wv = view as? WebView ?: findWebView(window.decorView)
     if (wv != null) {
+      trackPipLayoutOnWebView(wv)
       installBtAppChunkInterceptor(wv)
     }
   }
@@ -568,14 +872,20 @@ class MainActivity : TauriActivity() {
         delegate.shouldOverrideUrlLoading(view, request)
 
       override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+        updateRideStateFromUrl(url)
         delegate.onPageStarted(view, url, favicon)
       }
 
       override fun onPageFinished(view: WebView, url: String) {
+        updateRideStateFromUrl(url)
         delegate.onPageFinished(view, url)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) {
+          dispatchPipStateToWebView(true)
+        }
       }
 
       override fun onPageCommitVisible(view: WebView, url: String) {
+        updateRideStateFromUrl(url)
         delegate.onPageCommitVisible(view, url)
       }
 
@@ -584,6 +894,7 @@ class MainActivity : TauriActivity() {
       }
 
       override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+        updateRideStateFromUrl(url)
         delegate.doUpdateVisitedHistory(view, url, isReload)
       }
 
@@ -729,6 +1040,7 @@ class MainActivity : TauriActivity() {
 
   private fun setupWebViewFullscreen() {
     val wv = findWebView(window.decorView) ?: return
+    trackPipLayoutOnWebView(wv)
     installBtAppChunkInterceptor(wv)
     wv.keepScreenOn = true
     try {
@@ -876,6 +1188,7 @@ class MainActivity : TauriActivity() {
       permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
     }
     if (permissions.isNotEmpty()) {
+      suppressAutoPipUntilMs = SystemClock.elapsedRealtime() + 5000L
       ActivityCompat.requestPermissions(this, permissions.toTypedArray(), 1001)
     }
   }

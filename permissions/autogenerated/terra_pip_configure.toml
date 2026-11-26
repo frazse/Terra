@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terra-pip-configure"
+description = "Enables the terra_pip_configure command without any pre-configured scope."
+commands.allow = ["terra_pip_configure"]
+
+[[permission]]
+identifier = "deny-terra-pip-configure"
+description = "Denies the terra_pip_configure command without any pre-configured scope."
+commands.deny = ["terra_pip_configure"]

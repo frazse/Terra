@@ -69,6 +69,9 @@ fn main() {
                 "terra_read_ride_backup",
                 "terra_export_ride_gpx",
                 "terra_delete_ride_backup",
+                "terra_pip_status",
+                "terra_pip_configure",
+                "terra_enter_pip",
             ]),
         ),
     )

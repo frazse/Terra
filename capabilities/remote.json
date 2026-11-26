@@ -68,6 +68,9 @@
     "allow-terra-list-ride-backups",
     "allow-terra-read-ride-backup",
     "allow-terra-export-ride-gpx",
-    "allow-terra-delete-ride-backup"
+    "allow-terra-delete-ride-backup",
+    "allow-terra-pip-status",
+    "allow-terra-pip-configure",
+    "allow-terra-enter-pip"
   ]
 }

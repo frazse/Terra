@@ -118,7 +118,7 @@ npm run dist
 
 Output AppImage:
 ```text
-electron/dist/Terra-0.12.0.AppImage
+electron/dist/Terra-0.12.1.AppImage
 ```
 
 #### Development mode

@@ -170,6 +170,102 @@
 .terra-fg-restart { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 7px; background: #2d1e14; border: 1px solid #6b4423; color: #fbd38d; font-size: 12px; }
 .terra-fg-warn { color: #f6ad55; font-size: 11px; }
 .terra-fg-ok { color: #7ddc8a; font-size: 11px; }
+.action-button.terra-pip-action { display: inline-flex; align-items: center; justify-content: center; color: #d4d4d8; cursor: pointer; transition: color .15s; }
+.action-button.terra-pip-action:hover { color: #ffffff; }
+.action-button.terra-pip-action svg.action-icon { width: 20px; height: 20px; display: block; pointer-events: none; }
+.terra-pip-float { position: fixed; top: 12px; right: 54px; z-index: 2147483644; width: 34px; height: 34px; padding: 0;
+  border: 1px solid #3a3a44; border-radius: 50%; background: rgba(21, 21, 26, 0.78); color: #d4d4dc;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: .55; transition: opacity .15s;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.terra-pip-float:hover { opacity: 1; color: #fff; border-color: #5a5a68; }
+html.terra-pip .hud .zone-time,
+html.terra-pip .hud .zone-people,
+html.terra-pip .hud .zone-road,
+html.terra-pip .hud .zone-place,
+html.terra-pip .hud .zone-effort .panel-workout,
+html.terra-pip .hud .zone-effort .action-buttons,
+html.terra-pip .hud .zone-effort .zones-bar,
+html.terra-pip .hud .zone-effort .panel > div:has(> .zones-bar),
+html.terra-pip .terra-cog-float,
+html.terra-pip .terra-pip-float,
+html.terra-pip #terra-fps-stats,
+html.terra-pip #fps-monitor-hud,
+html.terra-pip .tr-cp-root,
+html.terra-pip #terra-gear-hud,
+html.terra-pip #tvc-hud,
+html.terra-pip #btz-console-hud,
+html.terra-pip #btz-ring,
+html.terra-pip #terra-gfx-split-handle,
+html.terra-pip .cinecam-warn,
+html.terra-pip .spectating-name,
+html.terra-pip .chat-toasts {
+  display: none !important;
+}
+html.terra-pip .hud {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-end !important;
+  align-items: stretch !important;
+  padding: 3px !important;
+}
+html.terra-pip .hud .zone-effort {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  align-self: stretch !important;
+  justify-content: flex-end !important;
+}
+html.terra-pip .hud .zone-effort .effort-stack {
+  gap: 0 !important;
+}
+html.terra-pip .hud .zone-effort .panel {
+  padding: 2px 5px !important;
+  border-radius: 6px !important;
+  background: rgba(12, 12, 18, 0.72) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html.terra-pip .hud .stats-grid {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: baseline !important;
+  justify-content: space-between !important;
+  gap: 1px 4px !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+html.terra-pip .hud .stat-cell {
+  width: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  display: flex !important;
+  align-items: baseline !important;
+  gap: 2px !important;
+  flex: 0 1 auto !important;
+  overflow: visible !important;
+}
+html.terra-pip .hud .stat-cell.terra-pip-hide-kcal {
+  display: none !important;
+}
+html.terra-pip .hud .stat-value {
+  min-width: 0 !important;
+  text-align: left !important;
+  font-size: 11px !important;
+  line-height: 1.1 !important;
+}
+html.terra-pip .hud .stat-cell.large .stat-value {
+  font-size: 13px !important;
+}
+html.terra-pip .hud .stat-unit {
+  font-size: 8px !important;
+}
+html.terra-pip .hud .stat-companion,
+html.terra-pip .stat-cell > canvas.terra-dark-graph {
+  display: none !important;
+}
+html.terra-pip .stat-cell > :not(canvas) {
+  opacity: 1 !important;
+}
 canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
   will-change: transform;
   transform: translateZ(0);
@@ -1033,6 +1129,17 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           fgSummaryBadge)),
       fgBody);
 
+    // Picture-in-Picture section (Android only)
+    const pipSummaryBadge = h('span', { class: 'terra-ver' }, '');
+    const pipBody = h('div', { class: 'terra-fg-body' });
+    const pipBox = h('details', { class: 'terra-ble terra-pip-panel', hidden: '' },
+      h('summary', {},
+        h('span', { class: 'terra-panel-title' },
+          h('span', { class: 'terra-caret', 'aria-hidden': 'true' }, '\u25b8'),
+          h('span', { class: 'terra-panel-label' }, 'Picture-in-Picture (PiP)'),
+          pipSummaryBadge)),
+      pipBody);
+
     // Data folder section (collapsed by default)
     const ddSummaryBadge = h('span', { class: 'terra-ver terra-dd-summary-path' }, '');
     const ddSection = h('div', { class: 'terra-datadir' });
@@ -1044,7 +1151,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           ddSummaryBadge)),
       ddSection);
 
-    const panelsBox = h('div', { class: 'terra-panels' }, bleBox, fgBox, ddBox);
+    const panelsBox = h('div', { class: 'terra-panels' }, bleBox, fgBox, pipBox, ddBox);
     const mainBox = h('div', { class: 'terra-main' }, addonsBox, panelsBox);
 
     foot = h('div', { class: 'terra-foot' },
@@ -1252,6 +1359,85 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           if (st && st.restartRequired) fgBox.open = true;
         } catch {
           /* Non-Electron hosts (Tauri / Android) do not implement framegen_get */
+        }
+      })();
+    }
+
+    // Populate Picture-in-Picture panel on Android
+    if (navigator.userAgent.includes('Android')) {
+      (async () => {
+        const renderPip = (st) => {
+          if (!st || !st.supported) return;
+          pipBox.hidden = false;
+          pipSummaryBadge.textContent = !st.enabled
+            ? 'Off'
+            : `Compact HUD \u00b7 ${st.autoEnter ? 'Auto-enter' : 'Manual'}`;
+
+          const saveFeedback = h('span', { class: 'terra-status' });
+          const savePip = async (patch) => {
+            try {
+              const next = await saveAndroidPipConfig(patch);
+              renderPip(next);
+              const fb = pipBody.querySelector('.terra-pip-saved');
+              if (fb) {
+                fb.textContent = 'saved';
+                setTimeout(() => { fb.textContent = ''; }, 2000);
+              }
+            } catch (e) {
+              showBanner('PiP save failed: ' + e, 'err');
+            }
+          };
+
+          const enabledChk = h('input', { type: 'checkbox' });
+          enabledChk.checked = !!st.enabled;
+          enabledChk.addEventListener('change', () => savePip({ enabled: enabledChk.checked }));
+
+          const autoEnterChk = h('input', { type: 'checkbox' });
+          autoEnterChk.checked = st.autoEnter !== false;
+          autoEnterChk.addEventListener('change', () => savePip({ autoEnter: autoEnterChk.checked }));
+
+          const showBtnChk = h('input', { type: 'checkbox' });
+          showBtnChk.checked = !!st.showButton;
+          showBtnChk.addEventListener('change', () => savePip({ showButton: showBtnChk.checked }));
+
+          const enterNowBtn = h('button', { class: 'terra-btn terra-btn-sm', type: 'button' }, 'Enter PiP now');
+          enterNowBtn.disabled = !st.enabled || !isRideLike();
+          enterNowBtn.addEventListener('click', async () => {
+            closeModal();
+            await triggerAndroidPip();
+          });
+
+          saveFeedback.classList.add('terra-pip-saved');
+
+          pipBody.replaceChildren(
+            h('div', { class: 'terra-fg-status' },
+              h('span', { class: 'terra-dot' + (st.enabled ? ' on' : '') }),
+              h('span', {}, st.enabled
+                ? (isRideLike() ? 'Active on this ride (compact rider stats HUD)' : 'Armed for /ride & /spectate')
+                : 'Picture-in-Picture disabled'),
+              saveFeedback),
+            h('label', { class: 'terra-fg-check' },
+              enabledChk,
+              h('span', {}, 'Enable Picture-in-Picture during rides')),
+            h('label', { class: 'terra-fg-check' },
+              autoEnterChk,
+              h('span', {}, 'Auto-enter PiP when leaving Terra during a ride')),
+            h('label', { class: 'terra-fg-check' },
+              showBtnChk,
+              h('span', {}, 'Show quick PiP button in ride controls')),
+            h('div', { style: 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;' },
+              enterNowBtn,
+              !isRideLike()
+                ? h('span', { class: 'terra-help', style: 'margin-top:0' }, 'Join or spectate a ride to enter PiP.')
+                : '')
+          );
+        };
+
+        try {
+          const st = await syncAndroidPipState();
+          renderPip(st);
+        } catch {
+          /* Ignore on hosts without Android PiP */
         }
       })();
     }
@@ -1484,6 +1670,120 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
     if (opts && opts.expand) settingsToggles.get(opts.expand)?.(true);
   }
 
+  /* ---------- Android PiP state + quick button ---------- */
+  const PIP_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+    '<rect x="2" y="4" width="20" height="16" rx="2"></rect>' +
+    '<rect x="12" y="11" width="8" height="6" rx="1" fill="currentColor" stroke="none"></rect></svg>';
+  const PIP_ACTION = PIP_ICON
+    .replace('width="18" height="18"', 'class="action-icon"')
+    .replace('stroke-width="1.6"', 'stroke-width="1.45"');
+  const isRideLike = () =>
+    location.pathname.startsWith('/ride') || location.pathname.startsWith('/spectate');
+  let pipState = {
+    supported: false,
+    enabled: false,
+    autoEnter: true,
+    hudMode: 'compact',
+    showButton: false,
+    inRide: isRideLike(),
+    inPip: false,
+  };
+
+  function syncPipHiddenStats() {
+    if (!pipState.inPip) return;
+    for (const cell of document.querySelectorAll('.hud .stats-grid .stat-cell')) {
+      const unitEl = cell.querySelector('.stat-unit');
+      const unitText = unitEl ? unitEl.textContent.trim().toLowerCase() : '';
+      cell.classList.toggle('terra-pip-hide-kcal', unitText === 'kcal');
+    }
+  }
+
+  function applyPipBodyClasses(inPip) {
+    const active = !!inPip;
+    for (const el of [document.documentElement, document.body]) {
+      if (!el) continue;
+      el.classList.toggle('terra-pip', active);
+      el.classList.toggle('terra-pip-compact', active);
+      el.classList.remove('terra-pip-full');
+    }
+    syncPipHiddenStats();
+  }
+
+  window.__terraSetPipState = (inPip) => {
+    pipState = {
+      ...pipState,
+      inPip: !!inPip,
+      hudMode: 'compact',
+    };
+    applyPipBodyClasses(pipState.inPip);
+  };
+
+  async function syncAndroidPipState() {
+    if (!navigator.userAgent.includes('Android')) return pipState;
+    try {
+      const st = await core.call('terra_pip_status', {});
+      if (st && typeof st === 'object') {
+        pipState = { ...pipState, ...st, inRide: isRideLike() };
+        applyPipBodyClasses(pipState.inPip, pipState.hudMode);
+        if (pipState.supported && st.inRide !== pipState.inRide) {
+          const next = await core.call('terra_pip_configure', { inRide: pipState.inRide });
+          if (next && typeof next === 'object') pipState = { ...pipState, ...next };
+        }
+      }
+    } catch (e) {
+      core.log('terra-ui', 'pip status failed: ' + e);
+    }
+    placeCog();
+    return pipState;
+  }
+
+  async function saveAndroidPipConfig(patch) {
+    const next = await core.call('terra_pip_configure', {
+      ...patch,
+      inRide: isRideLike(),
+    });
+    if (next && typeof next === 'object') {
+      pipState = { ...pipState, ...next };
+      applyPipBodyClasses(pipState.inPip, pipState.hudMode);
+    }
+    placeCog();
+    return pipState;
+  }
+
+  async function triggerAndroidPip() {
+    if (!navigator.userAgent.includes('Android') || !pipState.supported || !pipState.enabled) return;
+    try {
+      await core.call('terra_pip_configure', { inRide: isRideLike() });
+      await core.call('terra_enter_pip', {});
+    } catch (e) {
+      core.log('terra-ui', 'enter pip failed: ' + e);
+    }
+  }
+
+  if (navigator.userAgent.includes('Android')) {
+    const syncPipNav = () => {
+      const nextInRide = isRideLike();
+      if (nextInRide !== pipState.inRide) {
+        pipState.inRide = nextInRide;
+        if (pipState.supported) {
+          core.call('terra_pip_configure', { inRide: nextInRide }).catch(() => {});
+        }
+      }
+      placeCog();
+    };
+    for (const m of ['pushState', 'replaceState']) {
+      const orig = history[m];
+      history[m] = function (...a) {
+        const r = orig.apply(this, a);
+        setTimeout(syncPipNav, 0);
+        return r;
+      };
+    }
+    addEventListener('popstate', syncPipNav);
+    addEventListener('hashchange', syncPipNav);
+    syncAndroidPipState();
+  }
+
   /* ---------- cog in Biketerra's header, in-ride .action-buttons, or floating fallback ---------- */
   const GEAR = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
     '<circle cx="12" cy="12" r="3"></circle>' +
@@ -1491,11 +1791,16 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
   const GEAR_ACTION = GEAR
     .replace('width="18" height="18"', 'class="action-icon"')
     .replace('stroke-width="1.5"', 'stroke-width="1.35"');
-  let cog = null, actionCog = null, floatCog = null;
+  let cog = null, actionCog = null, floatCog = null, actionPip = null, floatPip = null;
   function placeCog() {
+    syncPipHiddenStats();
+    const showQuickPip = navigator.userAgent.includes('Android') &&
+      isRideLike() && pipState.supported && pipState.enabled && pipState.showButton && !pipState.inPip;
+
     const actionButtons = document.querySelector('.action-buttons');
     if (actionButtons) {
       if (floatCog && floatCog.parentNode) floatCog.remove();
+      if (floatPip && floatPip.parentNode) floatPip.remove();
       if (!actionCog) {
         actionCog = h('div', {
           class: 'action-button terra-cog-action',
@@ -1510,20 +1815,42 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
           openModal();
         });
       }
+      if (showQuickPip) {
+        if (!actionPip) {
+          actionPip = h('div', {
+            class: 'action-button terra-pip-action',
+            role: 'button',
+            tabindex: '-1',
+            'aria-label': 'Picture-in-Picture',
+            title: 'Picture-in-Picture',
+          });
+          actionPip.innerHTML = PIP_ACTION;
+          actionPip.addEventListener('click', (e) => {
+            e.stopPropagation();
+            triggerAndroidPip();
+          });
+        }
+        if (actionPip.parentNode !== actionButtons) actionButtons.append(actionPip);
+      } else if (actionPip && actionPip.parentNode) {
+        actionPip.remove();
+      }
       if (actionCog.parentNode !== actionButtons) actionButtons.append(actionCog);
-      const refIcon = actionButtons.querySelector('.action-button:not(.terra-cog-action) .action-icon');
-      const svg = actionCog.querySelector('svg');
-      if (refIcon && svg) {
-        const r = refIcon.getBoundingClientRect();
-        const sz = Math.round(r.height);
-        if (sz >= 14 && sz <= 48) {
-          svg.style.width = sz + 'px';
-          svg.style.height = sz + 'px';
+      const refIcon = actionButtons.querySelector('.action-button:not(.terra-cog-action):not(.terra-pip-action) .action-icon');
+      for (const btn of [actionCog, actionPip]) {
+        const svg = btn && btn.parentNode === actionButtons ? btn.querySelector('svg') : null;
+        if (refIcon && svg) {
+          const r = refIcon.getBoundingClientRect();
+          const sz = Math.round(r.height);
+          if (sz >= 14 && sz <= 48) {
+            svg.style.width = sz + 'px';
+            svg.style.height = sz + 'px';
+          }
         }
       }
       return;
-    } else if (actionCog && actionCog.parentNode) {
-      actionCog.remove();
+    } else {
+      if (actionCog && actionCog.parentNode) actionCog.remove();
+      if (actionPip && actionPip.parentNode) actionPip.remove();
     }
 
     const help = document.querySelector('.nav-profile a[href="/help-center"]') ||
@@ -1534,6 +1861,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
 
     if (anchor) {
       if (floatCog && floatCog.parentNode) floatCog.remove();
+      if (floatPip && floatPip.parentNode) floatPip.remove();
       if (!cog) {
         cog = h('button', { type: 'button', 'aria-label': 'Terra Settings', title: 'Terra Settings (Alt+T)' });
         cog.innerHTML = GEAR;
@@ -1544,7 +1872,7 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
       return;
     }
 
-    const onRideLike = location.pathname.startsWith('/ride') || location.pathname.startsWith('/spectate');
+    const onRideLike = isRideLike();
     if (onRideLike && document.body) {
       if (!floatCog) {
         floatCog = h('button', { type: 'button', class: 'terra-cog-float', 'aria-label': 'Terra Settings', title: 'Terra Settings (Alt+T)' });
@@ -1552,8 +1880,19 @@ canvas, svg, .leaflet-container, [class*="map"], [class*="elevation"] {
         floatCog.addEventListener('click', () => openModal());
       }
       if (!floatCog.parentNode) document.body.append(floatCog);
-    } else if (floatCog && floatCog.parentNode) {
-      floatCog.remove();
+      if (showQuickPip) {
+        if (!floatPip) {
+          floatPip = h('button', { type: 'button', class: 'terra-pip-float', 'aria-label': 'Picture-in-Picture', title: 'Picture-in-Picture' });
+          floatPip.innerHTML = PIP_ICON;
+          floatPip.addEventListener('click', () => triggerAndroidPip());
+        }
+        if (!floatPip.parentNode) document.body.append(floatPip);
+      } else if (floatPip && floatPip.parentNode) {
+        floatPip.remove();
+      }
+    } else {
+      if (floatCog && floatCog.parentNode) floatCog.remove();
+      if (floatPip && floatPip.parentNode) floatPip.remove();
     }
   }
 
